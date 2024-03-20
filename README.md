@@ -43,7 +43,7 @@ The recommended way to install this ACAP is to use the pre built eap file.
 Go to "Apps" on the camera and click "Add app".
 
 
-## Using the Axis_Cam_MediaMTX
+## Using the MediaMTX ACAP
 
 You will need to upload your own mediamtx.yml config file via sftp otherwise a blank config will be used.
 
