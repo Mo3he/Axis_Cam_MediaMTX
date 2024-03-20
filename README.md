@@ -1,7 +1,3 @@
-# Axis_Cam_MediaMTX
-
-
-
 # The MediaMTX installer ACAP
 
 This ACAP packages the scripts and files required to install the MediaMTX server on Axis Cameras.
