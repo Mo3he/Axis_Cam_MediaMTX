@@ -51,6 +51,8 @@ An exapmple is included and you need to place it in /usr/local/packages/MediaMTX
 
 https://github.com/Mo3he/Axis_Cam_MediaMTX/blob/main/mediamtx.yml
 
+https://github.com/bluenviron/mediamtx?tab=readme-ov-file#configuration
+
 The MediaMTX ACAP will run a script on startup that sets the required permissions and starts the service and app.
 Once started click "Open" to see the output of the logs.
 
