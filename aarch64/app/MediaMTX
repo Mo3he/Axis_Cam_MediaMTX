@@ -1,7 +1,0 @@
-#!/bin/sh
-
-    echo "Starting Service"
-    chmod 777 /usr/local/packages/MediaMTX/lib/mediamtx
-    /usr/local/packages/MediaMTX/lib/mediamtx &
-    echo "Service Started"
-    wait
