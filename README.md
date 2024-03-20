@@ -47,7 +47,11 @@ Go to "Apps" on the camera and click "Add app".
 
 ## Using the Axis_Cam_MediaMTX
 
-The Tailscale ACAP will run a script on startup that sets the required permissions and starts the service and app.
+You will need to upload your own mediamtx.yml config file via sftp otherwise a blank config will be used.
+
+An exapmple is included and you need to place it in /usr/local/packages/MediaMTX
+
+The MediaMTX ACAP will run a script on startup that sets the required permissions and starts the service and app.
 Once started click "Open" to see the output of the logs.
 
 When uninstalling the ACAP, all changes and files are removed from the camera.
