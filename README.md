@@ -2,7 +2,7 @@
 
 This ACAP packages the scripts and files required to install the MediaMTX server on Axis Cameras.
 
-Current version 1.6.0, 
+Current version 1.6.0
 
 
 ## Warning
@@ -22,9 +22,7 @@ MediaMTX (formerly rtsp-simple-server) is a ready-to-use and zero-dependency rea
 
 ## Links
 
-[https://tailscale.com/](https://github.com/bluenviron/mediamtx)
-
-https://github.com/tailscale/tailscale 
+https://github.com/bluenviron/mediamtx
 
 https://www.axis.com/
 
