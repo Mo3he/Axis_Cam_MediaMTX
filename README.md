@@ -56,6 +56,8 @@ https://github.com/bluenviron/mediamtx?tab=readme-ov-file#configuration
 The MediaMTX ACAP will run a script on startup that sets the required permissions and starts the service and app.
 Once started click "Open" to see the output of the logs.
 
+Further commands can then be issues via ssh.
+
 When uninstalling the ACAP, all changes and files are removed from the camera.
 
 
