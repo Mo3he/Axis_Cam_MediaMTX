@@ -53,6 +53,16 @@ https://github.com/Mo3he/Axis_Cam_MediaMTX/blob/main/mediamtx.yml
 
 https://github.com/bluenviron/mediamtx?tab=readme-ov-file#configuration
 
+For example
+
+Adding 
+```
+paths:
+      proxied:
+          source: rtsp://192.168.5.188/axis-media/media.amp?videocodec=h264&resolution=640x480
+```
+at the end of the mediamtx.yml will make the stream available at rtsp://192.168.5.188:8554/proxied
+
 The MediaMTX ACAP will run a script on startup that sets the required permissions and starts the service and app.
 Once started click "Open" to see the output of the logs.
 
