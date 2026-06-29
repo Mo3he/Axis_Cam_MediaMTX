@@ -1,0 +1,119 @@
+name: Build on MediaMTX release
+
+# Builds and publishes new ACAP packages whenever the upstream
+# bluenviron/mediamtx project publishes a new release.
+#
+# - Runs daily and can be triggered manually.
+# - Compares the latest upstream MediaMTX version to the version currently
+#   recorded in the manifests. If they differ, it bumps the version, builds
+#   both architectures, commits the bump, and publishes a GitHub release with
+#   the two .eap packages attached.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "MediaMTX version to build (without leading v), e.g. 1.20.0. Leave empty to use the latest upstream release."
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-on-mediamtx-release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine target version
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            latest="${INPUT_VERSION#v}"
+          else
+            latest=$(gh release view --repo bluenviron/mediamtx --json tagName --jq .tagName)
+            latest="${latest#v}"
+          fi
+          current=$(grep -oE '"version": "[0-9.]+"' aarch64/app/manifest.json | grep -oE '[0-9.]+' | head -1)
+          echo "Latest upstream: $latest | Current packaged: $current"
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$latest" != "$current" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date; nothing to build."
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bump version in manifests and README
+        run: |
+          set -euo pipefail
+          V="$VERSION"
+          for m in aarch64/app/manifest.json arm/app/manifest.json; do
+            sed -i -E 's/"version": "[0-9.]+"/"version": "'"$V"'"/' "$m"
+          done
+          sed -i -E 's/Current version: \*\*[0-9.]+\*\* \(MediaMTX v[0-9.]+\)/Current version: **'"$V"'** (MediaMTX v'"$V"')/' README.md
+
+      - name: Build aarch64 package
+        run: docker build --build-arg MEDIAMTX_VERSION="$VERSION" --tag mediamtx-aarch64 ./aarch64
+
+      - name: Build armv7hf package
+        run: docker build --build-arg MEDIAMTX_VERSION="$VERSION" --tag mediamtx-arm ./arm
+
+      - name: Extract .eap packages
+        run: |
+          set -euo pipefail
+          for img in mediamtx-aarch64 mediamtx-arm; do
+            id=$(docker create "$img")
+            docker cp "$id:/opt/app" "out-$img"
+            docker rm "$id" >/dev/null
+            cp "out-$img"/*.eap .
+          done
+          ls -la ./*.eap
+
+      - name: Commit version bump
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add aarch64/app/manifest.json arm/app/manifest.json README.md
+          if git diff --cached --quiet; then
+            echo "No version changes to commit."
+          else
+            git commit -m "Build MediaMTX v$VERSION"
+            git push
+          fi
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf 'Automated build packaging MediaMTX v%s for Axis cameras (aarch64 and armv7hf).\n\nUpstream changes: https://github.com/bluenviron/mediamtx/releases/tag/v%s\n' "$VERSION" "$VERSION" > release-notes.md
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists; uploading/refreshing assets."
+            gh release upload "v$VERSION" ./*.eap --clobber
+          else
+            gh release create "v$VERSION" ./*.eap --title "v$VERSION" --notes-file release-notes.md
+          fi

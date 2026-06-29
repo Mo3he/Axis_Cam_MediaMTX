@@ -98,10 +98,20 @@ When uninstalling the ACAP, all changes and files are removed from the camera.
 
 ## Build from source
 
+The MediaMTX binary is **not** stored in this repository. It is downloaded from the
+official [bluenviron/mediamtx](https://github.com/bluenviron/mediamtx/releases) release
+and verified against its published `checksums.sha256` during the Docker build.
+
 From the directory of the architecture you want to build (`arm` or `aarch64`):
 
 ```
 docker build --tag <package name> .
+```
+
+To build a specific MediaMTX version, pass the build argument (without the leading `v`):
+
+```
+docker build --build-arg MEDIAMTX_VERSION=1.19.2 --tag <package name> .
 ```
 
 Then copy the resulting `.eap` out of the image, e.g.:
@@ -111,6 +121,14 @@ docker cp $(docker create <package name>):/opt/app ./build
 ```
 
 The `.eap` package is created under `/opt/app` inside the image.
+
+## Automated releases
+
+A GitHub Actions workflow
+([`.github/workflows/build-on-mediamtx-release.yml`](.github/workflows/build-on-mediamtx-release.yml))
+runs daily, detects new upstream MediaMTX releases, bumps the packaged version, builds
+both architectures, and publishes a matching release with the `.eap` files attached. It
+can also be run manually from the Actions tab, optionally targeting a specific version.
 
 
 

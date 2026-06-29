@@ -6,3 +6,7 @@ build/
 
 # Prebuilt ACAP packages are distributed via GitHub Releases, not tracked in git
 *.eap
+
+# MediaMTX binary is downloaded and verified at build time, not tracked
+aarch64/app/lib/mediamtx
+arm/app/lib/mediamtx
