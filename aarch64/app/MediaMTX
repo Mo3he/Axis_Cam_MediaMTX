@@ -1,7 +1,29 @@
 #!/bin/sh
 
-    echo "Starting Service"
-    chmod 777 /usr/local/packages/MediaMTX/lib/mediamtx
-    /usr/local/packages/MediaMTX/lib/mediamtx &
-    echo "Service Started"
-    wait
+APPDIR="/usr/local/packages/MediaMTX"
+CONF="$APPDIR/mediamtx.yml"
+
+echo "Starting Service"
+if [ ! -f "$CONF" ]; then
+    echo "No mediamtx.yml found, installing default configuration"
+    cp "$APPDIR/mediamtx.defaults.yml" "$CONF"
+fi
+
+# Start the configuration web backend (FastCGI), reachable at
+# /local/MediaMTX/config.cgi via the device web server.
+if [ -x "$APPDIR/config.cgi" ]; then
+    "$APPDIR/config.cgi" &
+fi
+
+echo "Service Started"
+
+# Supervise MediaMTX: relaunch it whenever it exits. The config backend
+# triggers a restart by sending SIGTERM to the pid recorded below.
+while true; do
+    "$APPDIR/lib/mediamtx" "$CONF" &
+    MTX_PID=$!
+    echo "$MTX_PID" > "$APPDIR/mediamtx.pid"
+    wait "$MTX_PID"
+    echo "MediaMTX exited (code $?), restarting in 1s"
+    sleep 1
+done

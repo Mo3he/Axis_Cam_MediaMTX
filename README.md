@@ -1,92 +1,116 @@
 # The MediaMTX installer ACAP
 
-This ACAP packages the scripts and files required to install the MediaMTX server on Axis Cameras.
+This ACAP packages the [MediaMTX](https://github.com/bluenviron/mediamtx) real-time
+media server so it can be installed and run directly on Axis cameras, with a built-in
+web interface for editing its configuration.
 
-Current version 1.6.0
+Current version: **1.19.2** (MediaMTX v1.19.2)
 
-### Disclaimer: This is an independent, community-developed ACAP package and is not an official Axis Communications product. It was developed entirely on personal time and is not affiliated with, endorsed by, or supported by Axis Communications AB. Use it at your own risk. For official Axis software, visit axis.com 
+### Disclaimer
 
+This is an independent, community-developed ACAP package and is not an official Axis
+Communications product. It was developed entirely on personal time and is not affiliated
+with, endorsed by, or supported by Axis Communications AB. Use it at your own risk. For
+official Axis software, visit axis.com
 
-## Warning
-Axis is making changes to its firmware that will include the removal of root privileges from ACAP.
-With the release of Axis OS 12, ACAP's requiring root will no longer work.
-The MediaMTX ACAP requires root to function.
- 
-You can read more here
- 
-https://help.axis.com/en-us/axis-os#upcoming-breaking-changes
-
-If you have a use case where certain functionality used by an ACAP application currently requires root-user permissions or have a question about ACAP application signing, please contact Axis at acap-privileges@axis.com
-
-Thank you for your continued support.
 
 ## Purpose
 
-MediaMTX (formerly rtsp-simple-server) is a ready-to-use and zero-dependency real-time media server and media proxy that allows to publish, read, proxy, record and playback video and audio streams. It has been conceived as a "media router" that routes media streams from one end to the other.
+MediaMTX (formerly rtsp-simple-server) is a ready-to-use and zero-dependency real-time
+media server and media proxy that allows you to publish, read, proxy, record and play
+back video and audio streams. It has been conceived as a "media router" that routes media
+streams from one end to the other.
+
+## Features
+
+- Runs MediaMTX as a non-root ACAP (no root filesystem changes required).
+- **Built-in web configuration editor** — edit `mediamtx.yml` directly from the browser,
+  then save and restart the server to apply changes. No SSH or SFTP needed.
+- A working default configuration is installed automatically on first run.
+- **SD card recording** — the default `recordPath` points to the camera SD card
+  (`/var/spool/storage/areas/SD_DISK/MediaMTX/...`); recording is disabled by default and
+  can be enabled per path from the config editor.
+- Supervised process: MediaMTX is automatically relaunched if it exits.
 
 ## Links
 
-https://github.com/bluenviron/mediamtx
-
-https://www.axis.com/
+- MediaMTX: https://github.com/bluenviron/mediamtx
+- MediaMTX configuration reference: https://github.com/bluenviron/mediamtx?tab=readme-ov-file#configuration
+- Axis: https://www.axis.com/
 
 ## Compatibility
 
-The Axis_Cam_MediaMTX is compatable with Axis cameras with arm and aarch64 based Soc's.
+Compatible with Axis cameras with `arm` (armv7hf) and `aarch64` based SoCs. The packages
+are built with the ACAP Native SDK 12.9.0 and require a compatible AXIS OS version.
+
+To check your device architecture:
 
 ```
 curl --anyauth "*" -u <username>:<password> <device ip>/axis-cgi/basicdeviceinfo.cgi --data "{\"apiVersion\":\"1.0\",\"context\":\"Client defined request ID\",\"method\":\"getAllProperties\"}"
 ```
 
-where `<device ip>` is the IP address of the Axis device, `<username>` is the root username and `<password>` is the root password. Please
-note that you need to enclose your password with quotes (`'`) if it contains special characters.
+where `<device ip>` is the IP address of the Axis device, `<username>` is the root
+username and `<password>` is the root password. Please note that you need to enclose your
+password in quotes (`'`) if it contains special characters.
 
 ## Installing
 
-The recommended way to install this ACAP is to use the pre built eap file.
-Go to "Apps" on the camera and click "Add app".
+The recommended way to install is to use the pre-built `.eap` file from the
+[Releases](https://github.com/Mo3he/Axis_Cam_MediaMTX/releases) page:
 
+1. Download the `.eap` matching your architecture (`aarch64` or `armv7hf`).
+2. On the camera, go to **Apps** and click **Add app**.
+3. Select the downloaded `.eap` and install.
+4. Start the application.
 
-## Using the MediaMTX ACAP
+## Configuring MediaMTX
 
-You will need to upload your own mediamtx.yml config file via sftp otherwise a blank config will be used.
+A working default configuration is installed automatically the first time the app runs,
+so the server is usable immediately.
 
-An exapmple is included and you need to place it in /usr/local/packages/MediaMTX
+To change the configuration, open the app's settings page (click **Open** on the Apps
+page, or browse to `https://<device ip>/local/MediaMTX/index.html`). The page provides a
+full editor for `mediamtx.yml`:
 
-https://github.com/Mo3he/Axis_Cam_MediaMTX/blob/main/mediamtx.yml
+- **Reload** — reload the current configuration from the device.
+- **Save** — write your changes to `mediamtx.yml`.
+- **Save & Restart** — save and restart MediaMTX to apply the changes.
+- **Load defaults** — load the bundled default configuration into the editor (not saved
+  until you click Save).
+- **Show log** — view the application system log.
 
-https://github.com/bluenviron/mediamtx?tab=readme-ov-file#configuration
+The editor is admin-access only and authenticates against the device user pool, the same
+as VAPIX.
 
-For example
+### Example: allow anonymous viewing of an RTSP stream
 
-Allow anonymous viewing of RTSP stream
+Adding the following to `mediamtx.yml`:
 
-Adding 
-```
+```yaml
 paths:
-      proxied:
-          source: rtsp://user:password@IPAddress/axis-media/media.amp?videocodec=h264&resolution=640x480
+  proxied:
+    source: rtsp://user:password@IPAddress/axis-media/media.amp?videocodec=h264&resolution=640x480
 ```
-at the end of the mediamtx.yml will make the stream available at rtsp://IPAddress:8554/proxied with no authentication.
 
-The MediaMTX ACAP will run a script on startup that sets the required permissions and starts the service and app.
-Once started click "Open" to see the output of the logs.
-
-Further commands can then be issues via ssh.
+makes the stream available at `rtsp://IPAddress:8554/proxied` with no authentication.
 
 When uninstalling the ACAP, all changes and files are removed from the camera.
 
-
 ## Build from source
-To build, 
-From main directory of the version you want (arm/aarch64)
+
+From the directory of the architecture you want to build (`arm` or `aarch64`):
 
 ```
-docker build --tag <package name> . 
+docker build --tag <package name> .
 ```
+
+Then copy the resulting `.eap` out of the image, e.g.:
+
 ```
-docker cp $(docker create <package name>):/opt/app ./build 
+docker cp $(docker create <package name>):/opt/app ./build
 ```
+
+The `.eap` package is created under `/opt/app` inside the image.
 
 
 

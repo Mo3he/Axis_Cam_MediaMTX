@@ -1,21 +1,31 @@
 {
-  "schemaVersion": "1.3",
+  "schemaVersion": "1.7.0",
+  "resources": {
+      "linux": {
+          "user": {
+              "groups": ["storage"]
+          }
+      }
+  },
   "acapPackageConf": {
       "setup": {
           "appName": "MediaMTX",
           "friendlyName": "MediaMTX",
-          "vendor": "MediaMTX - Packaged by Mo3he",
+          "vendor": "Mo3he",
           "embeddedSdkVersion": "3.0",
-          "user": {
-              "group": "root",
-              "username": "root"
-          },
-          "vendorUrl": "https://github.com/bluenviron/mediamtx?tab=readme-ov-file#installation",
+          "vendorUrl": "https://github.com/Mo3he/Axis_Cam_MediaMTX",
           "runMode": "once",
-          "version": "1.6.0"
+          "version": "1.19.2"
         },
         "configuration":  {
-          "settingPage": "index.html"
+          "settingPage": "index.html",
+          "httpConfig": [
+            {
+              "type": "fastCgi",
+              "name": "config.cgi",
+              "access": "admin"
+            }
+          ]
         }
       }
   }

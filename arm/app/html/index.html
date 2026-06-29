@@ -1,19 +1,182 @@
 <!DOCTYPE html>
-<html>
-<body>
+<html lang="en">
 <head>
-    <h1 style="color:red;">Scroll to the bottom to find authentication URL</h1>
-    <script>
-        function refreshIFrame() {
-            var x = document.getElementById("*Your_iframe_id*");
-            x.contentWindow.location.reload();
-            var t = setTimeout(refreshIFrame, 5000);
-        }
-    </script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediaMTX Configuration</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(128,128,128,.35);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { font-size: 12px; opacity: .65; }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(128,128,128,.35);
+    align-items: center;
+  }
+  button {
+    font: inherit;
+    padding: 6px 12px;
+    border: 1px solid rgba(128,128,128,.5);
+    border-radius: 6px;
+    background: rgba(128,128,128,.08);
+    cursor: pointer;
+  }
+  button:hover { background: rgba(128,128,128,.18); }
+  button.primary { border-color: #2d7; background: #2d7; color: #062; font-weight: 600; }
+  button.warn { border-color: #e94; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status {
+    margin-left: auto;
+    font-size: 12.5px;
+    min-height: 18px;
+  }
+  .ok { color: #2a9d4a; }
+  .err { color: #d9534f; }
+  #editor {
+    flex: 1 1 auto;
+    width: 100%;
+    border: 0;
+    padding: 12px 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.45;
+    resize: none;
+    tab-size: 2;
+    white-space: pre;
+    outline: none;
+  }
+  #logWrap {
+    border-top: 1px solid rgba(128,128,128,.35);
+    display: none;
+  }
+  #logWrap.open { display: block; }
+  #log { width: 100%; height: 220px; border: 0; }
+</style>
 </head>
-<body onload="refreshIFrame()"> 
-    <iframe id="*Your_iframe_id*" src= "/axis-cgi/admin/systemlog.cgi?appname=MediaMTX" style="height:600px;width:100%;border: none;" ></iframe>
-</body>
+<body>
+  <header>
+    <h1>MediaMTX Configuration</h1>
+    <span class="sub">Editing mediamtx.yml</span>
+  </header>
 
+  <div class="toolbar">
+    <button id="reload">Reload</button>
+    <button id="save" class="primary">Save</button>
+    <button id="saveRestart" class="primary">Save &amp; Restart</button>
+    <button id="restart" class="warn">Restart</button>
+    <button id="defaults">Load defaults</button>
+    <button id="toggleLog">Show log</button>
+    <span id="status"></span>
+  </div>
+
+  <textarea id="editor" spellcheck="false" placeholder="Loading configuration..."></textarea>
+
+  <div id="logWrap">
+    <iframe id="log" title="System log"></iframe>
+  </div>
+
+  <script>
+    const editor = document.getElementById('editor');
+    const status = document.getElementById('status');
+    const buttons = document.querySelectorAll('button');
+    const logWrap = document.getElementById('logWrap');
+    const logFrame = document.getElementById('log');
+
+    function setStatus(msg, kind) {
+      status.textContent = msg;
+      status.className = kind || '';
+    }
+    function busy(on) {
+      buttons.forEach(b => b.disabled = on);
+    }
+
+    async function load(defaults) {
+      busy(true);
+      setStatus(defaults ? 'Loading defaults...' : 'Loading...');
+      try {
+        const url = defaults ? 'config.cgi?action=defaults' : 'config.cgi';
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        editor.value = await res.text();
+        setStatus(defaults ? 'Defaults loaded (not yet saved)' : 'Loaded', 'ok');
+      } catch (e) {
+        setStatus('Load failed: ' + e.message, 'err');
+      } finally {
+        busy(false);
+      }
+    }
+
+    async function save() {
+      busy(true);
+      setStatus('Saving...');
+      try {
+        const res = await fetch('config.cgi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: editor.value
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        setStatus('Saved', 'ok');
+        return true;
+      } catch (e) {
+        setStatus('Save failed: ' + e.message, 'err');
+        return false;
+      } finally {
+        busy(false);
+      }
+    }
+
+    async function restart() {
+      busy(true);
+      setStatus('Restarting...');
+      try {
+        const res = await fetch('config.cgi?action=restart', { method: 'POST' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        setStatus('Restart requested', 'ok');
+        refreshLog();
+      } catch (e) {
+        setStatus('Restart failed: ' + e.message, 'err');
+      } finally {
+        busy(false);
+      }
+    }
+
+    function refreshLog() {
+      logFrame.src = '/axis-cgi/admin/systemlog.cgi?appname=MediaMTX&t=' + Date.now();
+    }
+
+    document.getElementById('reload').onclick = () => load(false);
+    document.getElementById('save').onclick = () => save();
+    document.getElementById('saveRestart').onclick = async () => {
+      if (await save()) await restart();
+    };
+    document.getElementById('restart').onclick = () => restart();
+    document.getElementById('defaults').onclick = () => load(true);
+    document.getElementById('toggleLog').onclick = (e) => {
+      const open = logWrap.classList.toggle('open');
+      e.target.textContent = open ? 'Hide log' : 'Show log';
+      if (open) refreshLog();
+    };
+
+    load(false);
+  </script>
 </body>
 </html>
