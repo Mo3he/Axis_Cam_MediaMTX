@@ -6,6 +6,7 @@
  *   GET  config.cgi                   -> return current mediamtx.yml (text/plain)
  *   GET  config.cgi?action=defaults   -> return bundled mediamtx.defaults.yml
  *   GET  config.cgi?action=recordings -> JSON list of recorded .mp4 segments
+ *   GET  config.cgi?action=fragidx&file=<rel>   -> fragment index for MSE
  *   GET  config.cgi?action=recording&file=<rel> -> stream a recording (Range)
  *   POST config.cgi                   -> overwrite mediamtx.yml with request body
  *   POST config.cgi?action=restart    -> restart the MediaMTX process
@@ -18,6 +19,7 @@
 #include <fcgiapp.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -182,6 +184,687 @@ static void json_puts_escaped(FCGX_Stream* out, const char* s) {
     }
 }
 
+/*
+ * Minimal MP4 duration probe.
+ *
+ * Computes a recording's length on the device so the web UI does not have to
+ * download and parse each file in the browser. Handles both plain MP4 (mvhd /
+ * mdhd duration) and the fragmented MP4 that MediaMTX records (sum of fragment
+ * sample durations via moof/traf/tfdt/trun). Only box headers and the small
+ * moov/moof boxes are read; the large mdat payloads are skipped with a seek.
+ *
+ * MediaMTX writes the moov up front but leaves the mvhd/tkhd/mdhd duration
+ * fields at zero (it is an "empty moov" with no mehd). A browser <video> then
+ * has to download the whole file to discover the length before it can start,
+ * so large recordings appear to never play. mp4_probe() therefore also records
+ * the byte offsets of those duration fields so the streamer can patch in the
+ * real value (which has the same width, so no offsets shift) on the fly.
+ */
+
+#define MP4_MAX_TRACKS 8
+#define MP4_MAX_BOX    (16u * 1024 * 1024)
+#define MP4_BOX(a, b, c, d)                                                    \
+    (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) |    \
+     (uint32_t)(d))
+
+typedef struct {
+    uint32_t id;
+    uint32_t timescale;
+    uint64_t media_duration;
+    uint32_t default_dur; /* trex default_sample_duration */
+    uint64_t frag_end;    /* max baseMediaDecodeTime + fragment duration */
+    int      has_frag;
+    int      is_video;
+    size_t   tkhd_dur_rel; /* offset of tkhd duration field within moov buffer */
+    int      tkhd_dur_len; /* 4 or 8, 0 if absent */
+    size_t   mdhd_dur_rel; /* offset of mdhd duration field within moov buffer */
+    int      mdhd_dur_len;
+} mp4_track;
+
+/* A fixed-width duration field, recorded by the parser but not used now that
+ * playback goes through MSE (kept for the plain-MP4 duration computation). */
+
+typedef struct {
+    double duration; /* seconds, -1 if unknown */
+} mp4_info;
+
+static uint32_t mp4_be32(const unsigned char* p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+static uint64_t mp4_be64(const unsigned char* p) {
+    return ((uint64_t)mp4_be32(p) << 32) | (uint64_t)mp4_be32(p + 4);
+}
+
+/* Advance over one box in [p, end). On success returns the box end and sets
+ * type/body/bodylen; returns NULL when no more (or a malformed) box remains. */
+static const unsigned char* mp4_next(const unsigned char* p,
+                                     const unsigned char* end, uint32_t* type,
+                                     const unsigned char** body,
+                                     uint64_t* bodylen) {
+    if (p + 8 > end)
+        return NULL;
+    uint64_t size            = mp4_be32(p);
+    uint32_t t               = mp4_be32(p + 4);
+    const unsigned char* b   = p + 8;
+    if (size == 1) {
+        if (p + 16 > end)
+            return NULL;
+        size = mp4_be64(p + 8);
+        b    = p + 16;
+    } else if (size == 0) {
+        size = (uint64_t)(end - p);
+    }
+    if (size < (uint64_t)(b - p))
+        return NULL;
+    const unsigned char* boxend = p + size;
+    if (boxend > end || boxend < p)
+        return NULL;
+    *type    = t;
+    *body    = b;
+    *bodylen = (uint64_t)(boxend - b);
+    return boxend;
+}
+
+static void mp4_parse_trak(const unsigned char* base, const unsigned char* body,
+                           uint64_t len, mp4_track* tk) {
+    const unsigned char* p   = body;
+    const unsigned char* end = body + len;
+    uint32_t type;
+    const unsigned char* b;
+    uint64_t bl;
+    while ((p = mp4_next(p, end, &type, &b, &bl))) {
+        if (type == MP4_BOX('t', 'k', 'h', 'd') && bl >= 1) {
+            int    v8  = (b[0] == 1);
+            size_t ido = v8 ? 4 + 8 + 8 : 4 + 4 + 4;     /* track_ID */
+            size_t dro = v8 ? 4 + 8 + 8 + 4 + 4          /* duration */
+                            : 4 + 4 + 4 + 4 + 4;
+            int    drl = v8 ? 8 : 4;
+            if (bl >= ido + 4)
+                tk->id = mp4_be32(b + ido);
+            if (bl >= dro + (size_t)drl) {
+                tk->tkhd_dur_rel = (size_t)((b + dro) - base);
+                tk->tkhd_dur_len = drl;
+            }
+        } else if (type == MP4_BOX('m', 'd', 'i', 'a')) {
+            const unsigned char* q   = b;
+            const unsigned char* qe  = b + bl;
+            uint32_t t2;
+            const unsigned char* b2;
+            uint64_t bl2;
+            while ((q = mp4_next(q, qe, &t2, &b2, &bl2))) {
+                if (t2 == MP4_BOX('m', 'd', 'h', 'd') && bl2 >= 1) {
+                    int    v8  = (b2[0] == 1);
+                    size_t tso = v8 ? 4 + 8 + 8 : 4 + 4 + 4;      /* timescale */
+                    size_t dro = v8 ? 4 + 8 + 8 + 4 : 4 + 4 + 4 + 4;
+                    int    drl = v8 ? 8 : 4;
+                    if (bl2 >= dro + (size_t)drl) {
+                        tk->timescale      = mp4_be32(b2 + tso);
+                        tk->media_duration = v8 ? mp4_be64(b2 + dro)
+                                                : mp4_be32(b2 + dro);
+                        tk->mdhd_dur_rel   = (size_t)((b2 + dro) - base);
+                        tk->mdhd_dur_len   = drl;
+                    }
+                } else if (t2 == MP4_BOX('h', 'd', 'l', 'r') && bl2 >= 12) {
+                    if (mp4_be32(b2 + 8) == MP4_BOX('v', 'i', 'd', 'e'))
+                        tk->is_video = 1;
+                }
+            }
+        }
+    }
+}
+
+static void mp4_parse_moov(const unsigned char* base, const unsigned char* body,
+                           uint64_t len, uint32_t* movie_ts,
+                           uint64_t* movie_dur, size_t* mvhd_dur_rel,
+                           int* mvhd_dur_len, mp4_track* tracks, int* ntracks) {
+    const unsigned char* p   = body;
+    const unsigned char* end = body + len;
+    uint32_t type;
+    const unsigned char* b;
+    uint64_t bl;
+    while ((p = mp4_next(p, end, &type, &b, &bl))) {
+        if (type == MP4_BOX('m', 'v', 'h', 'd') && bl >= 1) {
+            int    v8  = (b[0] == 1);
+            size_t tso = v8 ? 4 + 8 + 8 : 4 + 4 + 4;          /* timescale */
+            size_t dro = v8 ? 4 + 8 + 8 + 4 : 4 + 4 + 4 + 4;  /* duration */
+            int    drl = v8 ? 8 : 4;
+            if (bl >= dro + (size_t)drl) {
+                *movie_ts     = mp4_be32(b + tso);
+                *movie_dur    = v8 ? mp4_be64(b + dro) : mp4_be32(b + dro);
+                *mvhd_dur_rel = (size_t)((b + dro) - base);
+                *mvhd_dur_len = drl;
+            }
+        } else if (type == MP4_BOX('t', 'r', 'a', 'k')) {
+            if (*ntracks < MP4_MAX_TRACKS) {
+                mp4_track* tk = &tracks[*ntracks];
+                memset(tk, 0, sizeof(*tk));
+                mp4_parse_trak(base, b, bl, tk);
+                (*ntracks)++;
+            }
+        } else if (type == MP4_BOX('m', 'v', 'e', 'x')) {
+            const unsigned char* q  = b;
+            const unsigned char* qe = b + bl;
+            uint32_t t2;
+            const unsigned char* b2;
+            uint64_t bl2;
+            while ((q = mp4_next(q, qe, &t2, &b2, &bl2))) {
+                if (t2 == MP4_BOX('t', 'r', 'e', 'x') && bl2 >= 16) {
+                    uint32_t tid = mp4_be32(b2 + 4);
+                    for (int i = 0; i < *ntracks; i++)
+                        if (tracks[i].id == tid)
+                            tracks[i].default_dur = mp4_be32(b2 + 12);
+                }
+            }
+        }
+    }
+}
+
+static void mp4_parse_moof(const unsigned char* body, uint64_t len,
+                           mp4_track* tracks, int ntracks) {
+    const unsigned char* p   = body;
+    const unsigned char* end = body + len;
+    uint32_t type;
+    const unsigned char* b;
+    uint64_t bl;
+    while ((p = mp4_next(p, end, &type, &b, &bl))) {
+        if (type != MP4_BOX('t', 'r', 'a', 'f'))
+            continue;
+        uint32_t track_id = 0, tfhd_dur = 0;
+        uint64_t base_dt = 0, trun_total = 0;
+        uint32_t trun_count = 0;
+        int have_tfdt = 0, have_trun = 0, trun_has_dur = 0;
+        const unsigned char* q  = b;
+        const unsigned char* qe = b + bl;
+        uint32_t t2;
+        const unsigned char* b2;
+        uint64_t bl2;
+        while ((q = mp4_next(q, qe, &t2, &b2, &bl2))) {
+            if (t2 == MP4_BOX('t', 'f', 'h', 'd') && bl2 >= 8) {
+                uint32_t flags = mp4_be32(b2) & 0x00FFFFFF;
+                track_id       = mp4_be32(b2 + 4);
+                size_t off     = 8;
+                if (flags & 0x000001)
+                    off += 8;
+                if (flags & 0x000002)
+                    off += 4;
+                if ((flags & 0x000008) && bl2 >= off + 4)
+                    tfhd_dur = mp4_be32(b2 + off);
+            } else if (t2 == MP4_BOX('t', 'f', 'd', 't') && bl2 >= 5) {
+                if (b2[0] == 1) {
+                    if (bl2 >= 12)
+                        base_dt = mp4_be64(b2 + 4);
+                } else {
+                    base_dt = mp4_be32(b2 + 4);
+                }
+                have_tfdt = 1;
+            } else if (t2 == MP4_BOX('t', 'r', 'u', 'n') && bl2 >= 8) {
+                uint32_t flags = mp4_be32(b2) & 0x00FFFFFF;
+                trun_count     = mp4_be32(b2 + 4);
+                have_trun      = 1;
+                size_t off     = 8;
+                if (flags & 0x000001)
+                    off += 4;
+                if (flags & 0x000004)
+                    off += 4;
+                if (flags & 0x000100) {
+                    size_t esz = 4;
+                    if (flags & 0x000200)
+                        esz += 4;
+                    if (flags & 0x000400)
+                        esz += 4;
+                    if (flags & 0x000800)
+                        esz += 4;
+                    trun_has_dur = 1;
+                    for (uint32_t i = 0; i < trun_count; i++) {
+                        if (off + 4 > bl2)
+                            break;
+                        trun_total += mp4_be32(b2 + off);
+                        off += esz;
+                    }
+                }
+            }
+        }
+        mp4_track* tk = NULL;
+        for (int i = 0; i < ntracks; i++)
+            if (tracks[i].id == track_id) {
+                tk = &tracks[i];
+                break;
+            }
+        if (!tk && ntracks > 0)
+            tk = &tracks[0];
+        if (!tk || !have_tfdt)
+            continue;
+        uint64_t fragdur = 0;
+        if (trun_has_dur)
+            fragdur = trun_total;
+        else if (have_trun) {
+            uint32_t d = tfhd_dur ? tfhd_dur : tk->default_dur;
+            fragdur    = (uint64_t)d * trun_count;
+        }
+        uint64_t endt = base_dt + fragdur;
+        if (endt > tk->frag_end)
+            tk->frag_end = endt;
+        tk->has_frag = 1;
+    }
+}
+
+static int mp4_probe(const char* path, mp4_info* info) {
+    info->duration = -1.0;
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return -1;
+    uint32_t movie_ts     = 0;
+    uint64_t movie_dur    = 0;
+    size_t   mvhd_dur_rel = 0;
+    int      mvhd_dur_len = 0;
+    mp4_track tracks[MP4_MAX_TRACKS];
+    int ntracks   = 0;
+    int have_moof = 0;
+    unsigned char hdr[16];
+
+    for (;;) {
+        off_t pos = ftello(f);
+        if (pos < 0 || fread(hdr, 1, 8, f) < 8)
+            break;
+        uint64_t size  = mp4_be32(hdr);
+        uint32_t type  = mp4_be32(hdr + 4);
+        uint64_t hsize = 8;
+        if (size == 1) {
+            if (fread(hdr + 8, 1, 8, f) < 8)
+                break;
+            size  = mp4_be64(hdr + 8);
+            hsize = 16;
+        } else if (size == 0) {
+            break; /* extends to EOF; nothing more to parse */
+        }
+        if (size < hsize)
+            break;
+        uint64_t payload = size - hsize;
+        if ((type == MP4_BOX('m', 'o', 'o', 'v') ||
+             type == MP4_BOX('m', 'o', 'o', 'f')) &&
+            payload > 0 && payload <= MP4_MAX_BOX) {
+            unsigned char* buf = malloc(payload);
+            if (buf && fread(buf, 1, payload, f) == payload) {
+                if (type == MP4_BOX('m', 'o', 'o', 'v')) {
+                    mp4_parse_moov(buf, buf, payload, &movie_ts, &movie_dur,
+                                   &mvhd_dur_rel, &mvhd_dur_len, tracks,
+                                   &ntracks);
+                } else {
+                    have_moof = 1;
+                    mp4_parse_moof(buf, payload, tracks, ntracks);
+                }
+            }
+            free(buf);
+        }
+        if (fseeko(f, pos + (off_t)size, SEEK_SET) != 0)
+            break;
+    }
+    fclose(f);
+
+    mp4_track* tk = NULL;
+    for (int i = 0; i < ntracks; i++)
+        if (tracks[i].is_video) {
+            tk = &tracks[i];
+            break;
+        }
+    if (!tk && ntracks > 0)
+        tk = &tracks[0];
+
+    if (have_moof && tk && tk->has_frag && tk->timescale > 0)
+        info->duration = (double)tk->frag_end / (double)tk->timescale;
+    else if (tk && tk->media_duration > 0 && tk->timescale > 0)
+        info->duration = (double)tk->media_duration / (double)tk->timescale;
+    else if (movie_dur > 0 && movie_ts > 0)
+        info->duration = (double)movie_dur / (double)movie_ts;
+
+    return 0;
+}
+
+static double mp4_duration_seconds(const char* path) {
+    mp4_info info;
+    if (mp4_probe(path, &info) != 0)
+        return -1.0;
+    return info.duration;
+}
+
+/*
+ * Fragment index for Media Source Extensions playback.
+ *
+ * MediaMTX records "empty moov" fragmented MP4 with no duration in the header
+ * and no trailing mfra index, so a browser <video src> has to download the
+ * entire file (up to ~1 GB) just to learn the length and build a seek index
+ * before it can start. The web UI therefore plays via MSE: it appends the
+ * small init segment (ftyp+moov) plus only the fragments it currently needs.
+ *
+ * action=fragidx returns the data MSE needs without scanning the file in the
+ * browser:
+ *   {"ok":true,"duration":<s>,"size":<bytes>,"init":<bytes>,
+ *    "codecs":"avc1.640032","frags":[[<t>,<byteOffset>],...]}
+ * where "init" is the byte length of the init segment (offset of the first
+ * moof) and "frags" lists keyframe (sync-sample) fragments as
+ * [timeSeconds, fileByteOffset] so the client can seek by jumping straight to
+ * the right fragment. Only box headers and the small moov/moof boxes are read.
+ */
+
+/* Build an MSE codecs string (e.g. "avc1.640032" or "avc1.640032,mp4a.40.2")
+ * by scanning the moov buffer for the avcC config and any mp4a sample entry. */
+static void mp4_detect_codecs(const unsigned char* moov, uint64_t len,
+                              char* out, size_t outsz) {
+    out[0] = '\0';
+    for (uint64_t i = 0; i + 8 <= len; i++) {
+        if (moov[i] == 'a' && moov[i + 1] == 'v' && moov[i + 2] == 'c' &&
+            moov[i + 3] == 'C') {
+            /* avcC payload follows the 4-byte type label:
+             * [0]=configurationVersion [1]=profile [2]=compat [3]=level */
+            unsigned prof = moov[i + 5];
+            unsigned comp = moov[i + 6];
+            unsigned lvl  = moov[i + 7];
+            snprintf(out, outsz, "avc1.%02x%02x%02x", prof, comp, lvl);
+            break;
+        }
+    }
+    for (uint64_t i = 0; i + 4 <= len; i++) {
+        if (moov[i] == 'm' && moov[i + 1] == 'p' && moov[i + 2] == '4' &&
+            moov[i + 3] == 'a') {
+            size_t cur = strlen(out);
+            snprintf(out + cur, outsz - cur, "%smp4a.40.2", cur ? "," : "");
+            break;
+        }
+    }
+}
+
+/* Parse one moof for the video track. Returns -1 when no matching traf is
+ * found, 0 for a non-keyframe fragment, 1 when its first sample is a sync
+ * sample (keyframe). On 0/1 it also reports the fragment's tfdt and duration. */
+static int mp4_moof_video(const unsigned char* body, uint64_t len,
+                          uint32_t video_id, uint32_t video_default_dur,
+                          uint64_t* tfdt_out, uint64_t* fragdur_out) {
+    const unsigned char* p   = body;
+    const unsigned char* end = body + len;
+    uint32_t type;
+    const unsigned char* b;
+    uint64_t bl;
+    while ((p = mp4_next(p, end, &type, &b, &bl))) {
+        if (type != MP4_BOX('t', 'r', 'a', 'f'))
+            continue;
+        uint32_t track_id = 0, tfhd_dur = 0, tfhd_dsf = 0;
+        uint64_t base_dt = 0, trun_total = 0;
+        uint32_t trun_count = 0, first_flags = 0;
+        int have_tfdt = 0, have_trun = 0, trun_has_dur = 0;
+        int have_dsf = 0, have_first_flags = 0;
+        const unsigned char* q  = b;
+        const unsigned char* qe = b + bl;
+        uint32_t t2;
+        const unsigned char* b2;
+        uint64_t bl2;
+        while ((q = mp4_next(q, qe, &t2, &b2, &bl2))) {
+            if (t2 == MP4_BOX('t', 'f', 'h', 'd') && bl2 >= 8) {
+                uint32_t flags = mp4_be32(b2) & 0x00FFFFFF;
+                track_id       = mp4_be32(b2 + 4);
+                size_t off     = 8;
+                if (flags & 0x000001)
+                    off += 8;
+                if (flags & 0x000002)
+                    off += 4;
+                if (flags & 0x000008) {
+                    if (bl2 >= off + 4)
+                        tfhd_dur = mp4_be32(b2 + off);
+                    off += 4;
+                }
+                if ((flags & 0x000020) && bl2 >= off + 4) {
+                    tfhd_dsf = mp4_be32(b2 + off);
+                    have_dsf = 1;
+                }
+            } else if (t2 == MP4_BOX('t', 'f', 'd', 't') && bl2 >= 5) {
+                if (b2[0] == 1) {
+                    if (bl2 >= 12)
+                        base_dt = mp4_be64(b2 + 4);
+                } else {
+                    base_dt = mp4_be32(b2 + 4);
+                }
+                have_tfdt = 1;
+            } else if (t2 == MP4_BOX('t', 'r', 'u', 'n') && bl2 >= 8) {
+                uint32_t flags = mp4_be32(b2) & 0x00FFFFFF;
+                trun_count     = mp4_be32(b2 + 4);
+                have_trun      = 1;
+                size_t off     = 8;
+                if (flags & 0x000001)
+                    off += 4; /* data_offset */
+                if (flags & 0x000004) {
+                    if (off + 4 <= bl2) {
+                        first_flags      = mp4_be32(b2 + off);
+                        have_first_flags = 1;
+                    }
+                    off += 4; /* first_sample_flags */
+                }
+                /* per-sample record layout */
+                size_t dur_off  = 0;
+                size_t rec      = 0;
+                if (flags & 0x000100) {
+                    dur_off = rec;
+                    rec += 4;
+                }
+                if (flags & 0x000200)
+                    rec += 4;
+                size_t flag_off = rec;
+                if (flags & 0x000400)
+                    rec += 4;
+                if (flags & 0x000800)
+                    rec += 4;
+                size_t recsz = rec;
+                if ((flags & 0x000400) && !have_first_flags &&
+                    off + flag_off + 4 <= bl2) {
+                    first_flags      = mp4_be32(b2 + off + flag_off);
+                    have_first_flags = 1;
+                }
+                if (flags & 0x000100) {
+                    trun_has_dur = 1;
+                    size_t o     = off;
+                    for (uint32_t i = 0; i < trun_count; i++) {
+                        if (o + dur_off + 4 > bl2)
+                            break;
+                        trun_total += mp4_be32(b2 + o + dur_off);
+                        o += recsz;
+                    }
+                }
+            }
+        }
+        if (video_id != 0 && track_id != video_id)
+            continue;
+        if (!have_tfdt)
+            continue;
+        uint64_t fragdur = 0;
+        if (trun_has_dur)
+            fragdur = trun_total;
+        else if (have_trun) {
+            uint32_t d = tfhd_dur ? tfhd_dur : video_default_dur;
+            fragdur    = (uint64_t)d * trun_count;
+        }
+        *tfdt_out    = base_dt;
+        *fragdur_out = fragdur;
+        uint32_t sflags  = 0;
+        int      have_sf = 0;
+        if (have_first_flags) {
+            sflags  = first_flags;
+            have_sf = 1;
+        } else if (have_dsf) {
+            sflags  = tfhd_dsf;
+            have_sf = 1;
+        }
+        if (!have_sf)
+            return 1; /* no flag info: treat as a seek point */
+        return (sflags & 0x00010000) ? 0 : 1;
+    }
+    return -1;
+}
+
+/* Confine a requested recording path to the recordings base directory.
+ * Returns 0 and fills realfull on success; sends an error response and
+ * returns -1 otherwise. */
+static int resolve_recording(FCGX_Request* r, const char* base,
+                             const char* file, char realfull[PATH_MAX]) {
+    if (!file[0] || strstr(file, "..") || file[0] == '/') {
+        send_json(r, "400 Bad Request",
+                  "{\"ok\":false,\"error\":\"invalid file\"}");
+        return -1;
+    }
+    char full[PATH_MAX];
+    snprintf(full, sizeof(full), "%s/%s", base, file);
+    char realbase[PATH_MAX];
+    if (!realpath(base, realbase) || !realpath(full, realfull)) {
+        send_json(r, "404 Not Found", "{\"ok\":false,\"error\":\"not found\"}");
+        return -1;
+    }
+    size_t bl = strlen(realbase);
+    if (strncmp(realfull, realbase, bl) != 0 ||
+        (realfull[bl] != '/' && realfull[bl] != '\0')) {
+        send_json(r, "403 Forbidden", "{\"ok\":false,\"error\":\"forbidden\"}");
+        return -1;
+    }
+    return 0;
+}
+
+static void send_fragidx(FCGX_Request* r, const char* base, const char* file) {
+    char realfull[PATH_MAX];
+    if (resolve_recording(r, base, file, realfull) != 0)
+        return;
+
+    FILE* f = fopen(realfull, "rb");
+    if (!f) {
+        send_json(r, "404 Not Found", "{\"ok\":false,\"error\":\"not found\"}");
+        return;
+    }
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || !S_ISREG(st.st_mode)) {
+        fclose(f);
+        send_json(r, "404 Not Found", "{\"ok\":false,\"error\":\"not found\"}");
+        return;
+    }
+    long long fsize = (long long)st.st_size;
+
+    mp4_track tracks[MP4_MAX_TRACKS];
+    int       ntracks      = 0;
+    uint32_t  movie_ts     = 0;
+    uint64_t  movie_dur    = 0;
+    size_t    mvhd_dur_rel = 0;
+    int       mvhd_dur_len = 0;
+    char      codecs[64]   = {0};
+    long long init_len     = -1;
+    uint32_t  vid_id = 0, vid_ts = 0, vid_default_dur = 0;
+    uint64_t  frag_end = 0;
+    int       have_frag = 0;
+
+    const size_t KF_MAX = 200000;
+    double*    kt   = NULL;
+    long long* ko   = NULL;
+    size_t     nkf  = 0;
+    size_t     capkf = 0;
+
+    unsigned char hdr[16];
+    for (;;) {
+        off_t pos = ftello(f);
+        if (pos < 0 || fread(hdr, 1, 8, f) < 8)
+            break;
+        uint64_t size  = mp4_be32(hdr);
+        uint32_t type  = mp4_be32(hdr + 4);
+        uint64_t hsize = 8;
+        if (size == 1) {
+            if (fread(hdr + 8, 1, 8, f) < 8)
+                break;
+            size  = mp4_be64(hdr + 8);
+            hsize = 16;
+        } else if (size == 0) {
+            break;
+        }
+        if (size < hsize)
+            break;
+        uint64_t payload = size - hsize;
+        if (type == MP4_BOX('m', 'o', 'o', 'v') && payload > 0 &&
+            payload <= MP4_MAX_BOX) {
+            unsigned char* buf = malloc(payload);
+            if (buf && fread(buf, 1, payload, f) == payload) {
+                mp4_parse_moov(buf, buf, payload, &movie_ts, &movie_dur,
+                               &mvhd_dur_rel, &mvhd_dur_len, tracks, &ntracks);
+                mp4_detect_codecs(buf, payload, codecs, sizeof(codecs));
+                for (int i = 0; i < ntracks; i++)
+                    if (tracks[i].is_video) {
+                        vid_id          = tracks[i].id;
+                        vid_ts          = tracks[i].timescale;
+                        vid_default_dur = tracks[i].default_dur;
+                        break;
+                    }
+                if (!vid_ts && ntracks > 0) {
+                    vid_id          = tracks[0].id;
+                    vid_ts          = tracks[0].timescale;
+                    vid_default_dur = tracks[0].default_dur;
+                }
+            }
+            free(buf);
+        } else if (type == MP4_BOX('m', 'o', 'o', 'f') && payload > 0 &&
+                   payload <= MP4_MAX_BOX) {
+            if (init_len < 0)
+                init_len = (long long)pos; /* first moof ends the init segment */
+            unsigned char* buf = malloc(payload);
+            if (buf && fread(buf, 1, payload, f) == payload) {
+                uint64_t tfdt = 0, fragdur = 0;
+                int kf = mp4_moof_video(buf, payload, vid_id, vid_default_dur,
+                                        &tfdt, &fragdur);
+                if (kf >= 0) {
+                    uint64_t endt = tfdt + fragdur;
+                    if (endt > frag_end)
+                        frag_end = endt;
+                    have_frag = 1;
+                    if (kf == 1 && vid_ts > 0 && nkf < KF_MAX) {
+                        if (nkf == capkf) {
+                            size_t nc = capkf ? capkf * 2 : 256;
+                            double*    nt = realloc(kt, nc * sizeof(double));
+                            long long* no = realloc(ko, nc * sizeof(long long));
+                            if (nt)
+                                kt = nt;
+                            if (no)
+                                ko = no;
+                            if (!nt || !no)
+                                break;
+                            capkf = nc;
+                        }
+                        kt[nkf] = (double)tfdt / (double)vid_ts;
+                        ko[nkf] = (long long)pos;
+                        nkf++;
+                    }
+                }
+            }
+            free(buf);
+        }
+        if (fseeko(f, pos + (off_t)size, SEEK_SET) != 0)
+            break;
+    }
+    fclose(f);
+
+    double duration = -1.0;
+    if (have_frag && vid_ts > 0)
+        duration = (double)frag_end / (double)vid_ts;
+    else if (movie_dur > 0 && movie_ts > 0)
+        duration = (double)movie_dur / (double)movie_ts;
+    if (init_len < 0)
+        init_len = 0;
+
+    FCGX_FPrintF(r->out,
+                 "Content-Type: application/json\r\n"
+                 "Cache-Control: no-store\r\n\r\n");
+    FCGX_FPrintF(r->out,
+                 "{\"ok\":true,\"duration\":%.3f,\"size\":%lld,\"init\":%lld,"
+                 "\"codecs\":\"%s\",\"frags\":[",
+                 duration > 0 ? duration : 0.0, fsize, init_len, codecs);
+    for (size_t i = 0; i < nkf; i++)
+        FCGX_FPrintF(r->out, "%s[%.3f,%lld]", i ? "," : "", kt[i], ko[i]);
+    FCGX_FPrintF(r->out, "]}");
+
+    free(kt);
+    free(ko);
+}
+
 /* Recursively emit JSON objects for every .mp4 file under base/rel. */
 static void list_recordings(FCGX_Request* r, const char* base, const char* rel,
                             int depth, int* first) {
@@ -216,11 +899,12 @@ static void list_recordings(FCGX_Request* r, const char* base, const char* rel,
             size_t len = strlen(e->d_name);
             if (len < 4 || strcasecmp(e->d_name + len - 4, ".mp4") != 0)
                 continue;
+            double dur = mp4_duration_seconds(full);
             FCGX_FPrintF(r->out, "%s{\"path\":\"", *first ? "" : ",");
             json_puts_escaped(r->out, childrel);
             FCGX_FPrintF(r->out,
-                         "\",\"size\":%lld,\"mtime\":%lld}",
-                         (long long)st.st_size, (long long)st.st_mtime);
+                         "\",\"size\":%lld,\"mtime\":%lld,\"dur\":%.3f}",
+                         (long long)st.st_size, (long long)st.st_mtime, dur);
             *first = 0;
         }
     }
@@ -279,27 +963,14 @@ static int query_param(const char* query, const char* key, char* out, size_t out
 }
 
 /* Stream a single recording file, honouring an optional HTTP Range request so
- * the browser <video> element can seek. The requested path is confined to the
- * recordings base directory via realpath() to prevent traversal. */
+ * the browser can seek. The web UI plays via MSE (action=fragidx), which
+ * issues many small Range requests, so this path stays a plain byte server
+ * with no per-request parsing. The path is confined to the recordings base
+ * directory via realpath() to prevent traversal. */
 static void send_recording(FCGX_Request* r, const char* base, const char* file) {
-    if (!file[0] || strstr(file, "..") || file[0] == '/') {
-        send_json(r, "400 Bad Request", "{\"ok\":false,\"error\":\"invalid file\"}");
+    char realfull[PATH_MAX];
+    if (resolve_recording(r, base, file, realfull) != 0)
         return;
-    }
-    char full[PATH_MAX];
-    snprintf(full, sizeof(full), "%s/%s", base, file);
-
-    char realbase[PATH_MAX], realfull[PATH_MAX];
-    if (!realpath(base, realbase) || !realpath(full, realfull)) {
-        send_json(r, "404 Not Found", "{\"ok\":false,\"error\":\"not found\"}");
-        return;
-    }
-    size_t bl = strlen(realbase);
-    if (strncmp(realfull, realbase, bl) != 0 ||
-        (realfull[bl] != '/' && realfull[bl] != '\0')) {
-        send_json(r, "403 Forbidden", "{\"ok\":false,\"error\":\"forbidden\"}");
-        return;
-    }
 
     FILE* f = fopen(realfull, "rb");
     if (!f) {
@@ -363,6 +1034,9 @@ static void send_recording(FCGX_Request* r, const char* base, const char* file) 
                      length);
     }
 
+    /* MediaMTX records an "empty moov" (zero duration in the header), but the
+     * web UI plays via MSE and gets the real duration from action=fragidx, so
+     * this path just streams the requested byte range verbatim. */
     if (fseeko(f, (off_t)start, SEEK_SET) != 0) {
         fclose(f);
         return;
@@ -428,6 +1102,14 @@ int main(void) {
                 int first = 1;
                 list_recordings(&request, base, "", 0, &first);
                 FCGX_FPrintF(request.out, "]");
+            } else if (strstr(query, "action=fragidx")) {
+                char base[PATH_MAX], file[PATH_MAX];
+                get_record_base(base, sizeof(base));
+                if (query_param(query, "file", file, sizeof(file)))
+                    send_fragidx(&request, base, file);
+                else
+                    send_json(&request, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"missing file\"}");
             } else if (strstr(query, "action=recording")) {
                 char base[PATH_MAX], file[PATH_MAX];
                 get_record_base(base, sizeof(base));

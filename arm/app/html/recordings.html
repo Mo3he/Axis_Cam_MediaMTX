@@ -162,57 +162,6 @@
       return (h ? h + ':' + p(m) : m) + ':' + p(sec);
     }
 
-    // Read a recording's duration by loading just its MP4 metadata. Fragmented
-    // MP4 may report Infinity, so seek far ahead to force the real duration.
-    function probeDuration(url) {
-      return new Promise((resolve) => {
-        const v = document.createElement('video');
-        v.preload = 'metadata';
-        v.muted = true;
-        let done = false;
-        const finish = (val) => {
-          if (done) return;
-          done = true;
-          v.removeAttribute('src');
-          v.load();
-          resolve(val);
-        };
-        v.onloadedmetadata = () => {
-          if (isFinite(v.duration) && v.duration > 0) { finish(v.duration); return; }
-          v.ondurationchange = () => { if (isFinite(v.duration)) finish(v.duration); };
-          try { v.currentTime = 1e7; } catch (e) { finish(NaN); }
-        };
-        v.onerror = () => finish(NaN);
-        setTimeout(() => finish(NaN), 8000);
-        v.src = url;
-      });
-    }
-
-    // Cache + limited-concurrency queue so we never probe the same file twice
-    // and avoid hammering the camera with many simultaneous requests.
-    const durCache = new Map();
-    const durQueue = [];
-    let durActive = 0;
-    const DUR_CONCURRENCY = 3;
-    function pumpDuration() {
-      while (durActive < DUR_CONCURRENCY && durQueue.length) {
-        const job = durQueue.shift();
-        durActive++;
-        probeDuration(job.url)
-          .then(job.resolve)
-          .finally(() => { durActive--; pumpDuration(); });
-      }
-    }
-    function getDuration(path, url) {
-      if (!durCache.has(path)) {
-        durCache.set(path, new Promise((resolve) => {
-          durQueue.push({ url, resolve });
-          pumpDuration();
-        }));
-      }
-      return durCache.get(path);
-    }
-
     function fmtTime(d) {
       if (!d) return '-';
       const p = (x) => String(x).padStart(2, '0');
@@ -277,10 +226,8 @@
           `<td>${escapeHtml(it.stream)}</td>` +
           `<td>${fmtTime(it.start)}</td>` +
           `<td class="size">${fmtSize(it.size)}</td>` +
-          `<td class="dur">\u2026</td>` +
+          `<td class="dur">${fmtDuration(it.dur)}</td>` +
           `<td class="actions"></td>`;
-        const durCell = tr.querySelector('.dur');
-        getDuration(it.path, url).then(d => { durCell.textContent = fmtDuration(d); });
         const actions = tr.querySelector('.actions');
         const play = document.createElement('button');
         play.textContent = 'Play';
@@ -299,12 +246,220 @@
       emptyEl.style.display = filtered.length ? 'none' : 'block';
     }
 
-    function playRecording(it, url) {
-      playName.textContent = it.stream + '  -  ' + fmtTime(it.start);
+    // ----- Playback -------------------------------------------------------
+    // MediaMTX records fragmented MP4 with an "empty moov" (no duration in the
+    // header) and no trailing index, so a native <video src> has to download
+    // the whole file (up to ~1 GB) before it can start or seek. Instead we play
+    // through Media Source Extensions: the server's action=fragidx gives the
+    // init-segment size, duration, codec and a keyframe index, and we append
+    // only the bytes currently needed, evicting old data to stay within quota.
+
+    const MSE_CHUNK  = 1 << 20; // 1 MiB fetch granularity
+    const MSE_AHEAD  = 25;      // seconds of buffer to keep ahead of playhead
+    const MSE_BEHIND = 30;      // seconds of buffer to keep behind playhead
+
+    let mseSession = null;
+
+    function destroyMse() {
+      const s = mseSession;
+      if (!s) return;
+      mseSession = null;
+      s.stopped = true;
+      try { s.abort(); } catch (e) {}
+      player.onseeking = null;
+      player.ontimeupdate = null;
+      if (s.objectUrl) { try { URL.revokeObjectURL(s.objectUrl); } catch (e) {} }
+    }
+
+    function bufferedEndAt(sb, t) {
+      for (let i = 0; i < sb.buffered.length; i++) {
+        if (t >= sb.buffered.start(i) - 0.25 && t <= sb.buffered.end(i) + 0.25)
+          return sb.buffered.end(i);
+      }
+      return t;
+    }
+
+    function isBuffered(sb, t) {
+      for (let i = 0; i < sb.buffered.length; i++) {
+        if (t >= sb.buffered.start(i) && t < sb.buffered.end(i) - 0.1) return true;
+      }
+      return false;
+    }
+
+    function playNative(url) {
+      destroyMse();
       player.src = url;
-      playerWrap.classList.add('open');
       player.play().catch(() => {});
+    }
+
+    async function playRecording(it, url) {
+      playName.textContent = it.stream + '  -  ' + fmtTime(it.start);
+      playerWrap.classList.add('open');
       playerWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+      destroyMse();
+      player.removeAttribute('src');
+      player.load();
+
+      if (!('MediaSource' in window)) { playNative(url); return; }
+
+      const idxUrl = 'config.cgi?action=fragidx&file=' + encodeURIComponent(it.path);
+      let idx;
+      try {
+        const res = await fetch(idxUrl, { cache: 'no-store' });
+        idx = await res.json();
+      } catch (e) { playNative(url); return; }
+
+      if (!idx || !idx.ok || !idx.codecs || !idx.init ||
+          !Array.isArray(idx.frags) || idx.frags.length === 0) {
+        playNative(url); return;
+      }
+      const mime = 'video/mp4; codecs="' + idx.codecs + '"';
+      if (!MediaSource.isTypeSupported(mime)) { playNative(url); return; }
+
+      startMse(url, idx, mime);
+    }
+
+    function startMse(url, idx, mime) {
+      const ms = new MediaSource();
+      const s = {
+        url, idx, ms, sb: null,
+        fetchOff: idx.init, stopped: false, pumping: false, pumpPromise: null,
+        seekToken: 0, opChain: Promise.resolve(), ac: null, objectUrl: null,
+      };
+      mseSession = s;
+
+      // Byte offset of the last keyframe at or before time t.
+      s.offsetForTime = (t) => {
+        const fr = idx.frags;
+        let lo = 0, hi = fr.length - 1, ans = 0;
+        while (lo <= hi) {
+          const m = (lo + hi) >> 1;
+          if (fr[m][0] <= t) { ans = m; lo = m + 1; } else hi = m - 1;
+        }
+        return fr[ans][1];
+      };
+
+      s.abort = () => { if (s.ac) { try { s.ac.abort(); } catch (e) {} s.ac = null; } };
+
+      s.fetchRange = async (a, b) => {
+        s.ac = new AbortController();
+        const res = await fetch(url, {
+          headers: { Range: 'bytes=' + a + '-' + b },
+          signal: s.ac.signal, cache: 'no-store',
+        });
+        const buf = new Uint8Array(await res.arrayBuffer());
+        s.ac = null;
+        return buf;
+      };
+
+      // Serialise every SourceBuffer mutation: each op waits for the previous
+      // to fire updateend so we never touch the buffer while it is updating.
+      s.sbOp = (fn) => {
+        s.opChain = s.opChain.then(() => new Promise((resolve, reject) => {
+          if (s.stopped || !s.sb) return resolve();
+          const sb = s.sb;
+          const done = () => { sb.removeEventListener('updateend', done); sb.removeEventListener('error', err); resolve(); };
+          const err  = () => { sb.removeEventListener('updateend', done); sb.removeEventListener('error', err); reject(new Error('SourceBuffer error')); };
+          sb.addEventListener('updateend', done);
+          sb.addEventListener('error', err);
+          try { fn(sb); } catch (e) { sb.removeEventListener('updateend', done); sb.removeEventListener('error', err); reject(e); }
+        }));
+        return s.opChain;
+      };
+
+      s.objectUrl = URL.createObjectURL(ms);
+      player.src = s.objectUrl;
+
+      ms.addEventListener('sourceopen', async () => {
+        if (s.stopped) return;
+        try {
+          s.sb = ms.addSourceBuffer(mime);
+          try { s.sb.mode = 'segments'; } catch (e) {}
+          if (idx.duration > 0) { try { ms.duration = idx.duration; } catch (e) {} }
+          const init = await s.fetchRange(0, idx.init - 1);
+          if (s.stopped) return;
+          await s.sbOp((sb) => sb.appendBuffer(init));
+          s.fetchOff = idx.init;
+          pumpMse(s);
+          player.play().catch(() => {});
+        } catch (e) {
+          if (!s.stopped) playNative(url);
+        }
+      });
+
+      player.onseeking = () => onMseSeek(s);
+      player.ontimeupdate = () => { if (!s.pumping) pumpMse(s); };
+    }
+
+    function pumpMse(s) {
+      if (s.stopped || s.pumping || !s.sb) return s.pumpPromise || Promise.resolve();
+      s.pumping = true;
+      const gen = s.seekToken; // a seek bumps seekToken and stops this pump
+      s.pumpPromise = (async () => {
+        try {
+          while (!s.stopped && s.seekToken === gen) {
+            const ct = player.currentTime;
+            if (bufferedEndAt(s.sb, ct) - ct > MSE_AHEAD) break; // enough ahead
+            if (s.fetchOff >= s.idx.size) {                       // reached EOF
+              try { if (s.ms.readyState === 'open') s.ms.endOfStream(); } catch (e) {}
+              break;
+            }
+            const a = s.fetchOff;
+            const b = Math.min(s.idx.size - 1, a + MSE_CHUNK - 1);
+            let data;
+            try { data = await s.fetchRange(a, b); }
+            catch (e) { break; } // aborted by a seek, or a network error
+            if (s.stopped || s.seekToken !== gen) break;
+            try {
+              await s.sbOp((sb) => sb.appendBuffer(data));
+            } catch (e) {
+              if (e && e.name === 'QuotaExceededError') {
+                await evictMse(s, true);
+                try { await s.sbOp((sb) => sb.appendBuffer(data)); }
+                catch (e2) { break; }
+              } else { break; }
+            }
+            s.fetchOff = b + 1;
+            await evictMse(s, false);
+          }
+        } finally {
+          s.pumping = false;
+        }
+      })();
+      return s.pumpPromise;
+    }
+
+    async function evictMse(s, aggressive) {
+      if (s.stopped || !s.sb || !s.sb.buffered.length) return;
+      const ct = player.currentTime;
+      const start = s.sb.buffered.start(0);
+      const removeEnd = ct - (aggressive ? 5 : MSE_BEHIND);
+      if (removeEnd > start + 1) {
+        try { await s.sbOp((sb) => sb.remove(start, removeEnd)); } catch (e) {}
+      }
+    }
+
+    async function onMseSeek(s) {
+      if (s.stopped || !s.sb) return;
+      const t = player.currentTime;
+      if (isBuffered(s.sb, t)) { pumpMse(s); return; }
+      const token = ++s.seekToken;
+      s.abort();                       // cancel any in-flight fetch
+      try { await s.pumpPromise; } catch (e) {} // let the pump fully stop
+      try { await s.opChain; } catch (e) {}
+      if (s.stopped || token !== s.seekToken) return;
+      // Reset the parser so the next append starts a fresh coded-frame group at
+      // the new fragment instead of trying to continue the previous one.
+      try { s.sb.abort(); } catch (e) {}
+      if (s.sb.buffered.length) {      // drop stale ranges to free quota
+        const a = s.sb.buffered.start(0);
+        const b = s.sb.buffered.end(s.sb.buffered.length - 1);
+        try { await s.sbOp((sb) => sb.remove(a, b)); } catch (e) {}
+      }
+      if (s.stopped || token !== s.seekToken) return;
+      s.fetchOff = s.offsetForTime(t); // jump straight to the keyframe
+      pumpMse(s);
     }
 
     function escapeHtml(s) {
@@ -321,6 +476,7 @@
     toEl.onchange = render;
     document.getElementById('closePlayer').onclick = () => {
       player.pause();
+      destroyMse();
       player.removeAttribute('src');
       player.load();
       playerWrap.classList.remove('open');
