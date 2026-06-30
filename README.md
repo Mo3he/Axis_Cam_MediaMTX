@@ -1,4 +1,4 @@
-# The MediaMTX installer ACAP
+# The MediaMTX ACAP
 
 This ACAP packages the [MediaMTX](https://github.com/bluenviron/mediamtx) real-time
 media server so it can be installed and run directly on Axis cameras, with a built-in
