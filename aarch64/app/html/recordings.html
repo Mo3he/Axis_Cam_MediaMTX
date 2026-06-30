@@ -61,7 +61,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid rgba(128,128,128,.2); }
   th { position: sticky; top: 0; background: Canvas; font-weight: 600; font-size: 12px; opacity: .8; }
-  td.size, td.actions { white-space: nowrap; }
+  td.size, td.dur, td.actions { white-space: nowrap; }
   tr:hover td { background: rgba(128,128,128,.08); }
   .empty { padding: 24px 14px; opacity: .6; font-size: 13px; }
   #playerWrap {
@@ -111,6 +111,7 @@
           <th>Stream</th>
           <th>Start time</th>
           <th>Size</th>
+          <th>Duration</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -151,6 +152,65 @@
       let i = -1;
       do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
       return n.toFixed(1) + ' ' + u[i];
+    }
+
+    function fmtDuration(s) {
+      if (!isFinite(s) || s <= 0) return '-';
+      s = Math.round(s);
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+      const p = (x) => String(x).padStart(2, '0');
+      return (h ? h + ':' + p(m) : m) + ':' + p(sec);
+    }
+
+    // Read a recording's duration by loading just its MP4 metadata. Fragmented
+    // MP4 may report Infinity, so seek far ahead to force the real duration.
+    function probeDuration(url) {
+      return new Promise((resolve) => {
+        const v = document.createElement('video');
+        v.preload = 'metadata';
+        v.muted = true;
+        let done = false;
+        const finish = (val) => {
+          if (done) return;
+          done = true;
+          v.removeAttribute('src');
+          v.load();
+          resolve(val);
+        };
+        v.onloadedmetadata = () => {
+          if (isFinite(v.duration) && v.duration > 0) { finish(v.duration); return; }
+          v.ondurationchange = () => { if (isFinite(v.duration)) finish(v.duration); };
+          try { v.currentTime = 1e7; } catch (e) { finish(NaN); }
+        };
+        v.onerror = () => finish(NaN);
+        setTimeout(() => finish(NaN), 8000);
+        v.src = url;
+      });
+    }
+
+    // Cache + limited-concurrency queue so we never probe the same file twice
+    // and avoid hammering the camera with many simultaneous requests.
+    const durCache = new Map();
+    const durQueue = [];
+    let durActive = 0;
+    const DUR_CONCURRENCY = 3;
+    function pumpDuration() {
+      while (durActive < DUR_CONCURRENCY && durQueue.length) {
+        const job = durQueue.shift();
+        durActive++;
+        probeDuration(job.url)
+          .then(job.resolve)
+          .finally(() => { durActive--; pumpDuration(); });
+      }
+    }
+    function getDuration(path, url) {
+      if (!durCache.has(path)) {
+        durCache.set(path, new Promise((resolve) => {
+          durQueue.push({ url, resolve });
+          pumpDuration();
+        }));
+      }
+      return durCache.get(path);
     }
 
     function fmtTime(d) {
@@ -217,7 +277,10 @@
           `<td>${escapeHtml(it.stream)}</td>` +
           `<td>${fmtTime(it.start)}</td>` +
           `<td class="size">${fmtSize(it.size)}</td>` +
+          `<td class="dur">\u2026</td>` +
           `<td class="actions"></td>`;
+        const durCell = tr.querySelector('.dur');
+        getDuration(it.path, url).then(d => { durCell.textContent = fmtDuration(d); });
         const actions = tr.querySelector('.actions');
         const play = document.createElement('button');
         play.textContent = 'Play';

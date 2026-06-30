@@ -105,9 +105,12 @@
   #editor {
     background: transparent;
     color: transparent;
-    caret-color: currentColor;
+    caret-color: #111;
     resize: none;
     outline: none;
+  }
+  @media (prefers-color-scheme: dark) {
+    #editor { caret-color: #eee; }
   }
   #editor::selection { background: rgba(80,140,255,.35); }
   /* token colors (tuned for light + dark) */
@@ -297,7 +300,8 @@
     }
 
     function refreshLog() {
-      logFrame.src = '/axis-cgi/admin/systemlog.cgi?appname=MediaMTX&t=' + Date.now();
+      logFrame.src = 'about:blank';
+      logFrame.src = '/axis-cgi/admin/systemlog.cgi?appname=MediaMTX';
     }
 
     document.getElementById('reload').onclick = () => load(false);
