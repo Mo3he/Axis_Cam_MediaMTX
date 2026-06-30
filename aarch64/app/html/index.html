@@ -328,6 +328,18 @@
         editor.value = editor.value.slice(0, s) + '  ' + editor.value.slice(en);
         editor.selectionStart = editor.selectionEnd = s + 2;
         render();
+      } else if (e.key === 'Enter') {
+        // Insert the newline ourselves: some host UIs swallow the textarea's
+        // default Enter action. Preserve the current line's indentation.
+        e.preventDefault();
+        const s = editor.selectionStart, en = editor.selectionEnd;
+        const before = editor.value.slice(0, s);
+        const lineStart = before.lastIndexOf('\n') + 1;
+        const indent = (before.slice(lineStart).match(/^[ \t]*/) || [''])[0];
+        const ins = '\n' + indent;
+        editor.value = before + ins + editor.value.slice(en);
+        editor.selectionStart = editor.selectionEnd = s + ins.length;
+        render();
       }
     });
 
