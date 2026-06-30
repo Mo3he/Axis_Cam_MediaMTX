@@ -9,7 +9,7 @@ Current version: **1.19.2** (MediaMTX v1.19.2)
 ### Disclaimer
 
 This is an independent, community-developed ACAP package and is not an official Axis
-Communications product. It was developed entirely on personal time and is not affiliated
+Communications product. It is not affiliated
 with, endorsed by, or supported by Axis Communications AB. Use it at your own risk. For
 official Axis software, visit axis.com
 
