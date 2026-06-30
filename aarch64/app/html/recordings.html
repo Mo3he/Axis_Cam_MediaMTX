@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediaMTX Recordings</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(128,128,128,.35);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { font-size: 12px; opacity: .65; }
+  header nav { margin-left: auto; display: flex; gap: 4px; }
+  header nav a {
+    font-size: 12.5px;
+    text-decoration: none;
+    color: inherit;
+    padding: 5px 10px;
+    border: 1px solid rgba(128,128,128,.5);
+    border-radius: 6px;
+  }
+  header nav a.active { background: rgba(128,128,128,.18); font-weight: 600; }
+  header nav a:hover { background: rgba(128,128,128,.12); }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(128,128,128,.35);
+    align-items: flex-end;
+  }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { font-size: 11px; opacity: .7; }
+  input, select, button {
+    font: inherit;
+    padding: 6px 10px;
+    border: 1px solid rgba(128,128,128,.5);
+    border-radius: 6px;
+    background: rgba(128,128,128,.08);
+  }
+  button { cursor: pointer; }
+  button:hover { background: rgba(128,128,128,.18); }
+  button.primary { border-color: #2d7; background: #2d7; color: #062; font-weight: 600; }
+  #status { margin-left: auto; font-size: 12.5px; min-height: 18px; }
+  .ok { color: #2a9d4a; }
+  .err { color: #d9534f; }
+  main { flex: 1 1 auto; overflow: auto; padding: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid rgba(128,128,128,.2); }
+  th { position: sticky; top: 0; background: Canvas; font-weight: 600; font-size: 12px; opacity: .8; }
+  td.size, td.actions { white-space: nowrap; }
+  tr:hover td { background: rgba(128,128,128,.08); }
+  .empty { padding: 24px 14px; opacity: .6; font-size: 13px; }
+  #playerWrap {
+    border-top: 1px solid rgba(128,128,128,.35);
+    display: none;
+    padding: 10px 14px;
+    background: rgba(128,128,128,.05);
+  }
+  #playerWrap.open { display: block; }
+  #playerWrap .row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  #playerWrap .name { font-size: 12.5px; font-weight: 600; word-break: break-all; }
+  video { width: 100%; max-height: 50vh; background: #000; border-radius: 6px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>MediaMTX Recordings</h1>
+    <span class="sub">Stored segments</span>
+    <nav>
+      <a href="index.html">Configuration</a>
+      <a href="recordings.html" class="active">Recordings</a>
+    </nav>
+  </header>
+
+  <div class="toolbar">
+    <div class="field">
+      <label for="stream">Stream</label>
+      <select id="stream"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="from">From</label>
+      <input type="datetime-local" id="from">
+    </div>
+    <div class="field">
+      <label for="to">To</label>
+      <input type="datetime-local" id="to">
+    </div>
+    <button id="clear">Clear filter</button>
+    <button id="reload" class="primary">Refresh</button>
+    <span id="status"></span>
+  </div>
+
+  <main>
+    <table id="table">
+      <thead>
+        <tr>
+          <th>Stream</th>
+          <th>Start time</th>
+          <th>Size</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none">No recordings found.</div>
+  </main>
+
+  <div id="playerWrap">
+    <div class="row">
+      <span class="name" id="playName"></span>
+      <button id="closePlayer" style="margin-left:auto">Close</button>
+    </div>
+    <video id="player" controls preload="metadata"></video>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const rows = document.getElementById('rows');
+    const emptyEl = document.getElementById('empty');
+    const streamSel = document.getElementById('stream');
+    const fromEl = document.getElementById('from');
+    const toEl = document.getElementById('to');
+    const playerWrap = document.getElementById('playerWrap');
+    const player = document.getElementById('player');
+    const playName = document.getElementById('playName');
+
+    let items = [];
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg;
+      statusEl.className = kind || '';
+    }
+
+    function fmtSize(n) {
+      if (n < 1024) return n + ' B';
+      const u = ['KB', 'MB', 'GB', 'TB'];
+      let i = -1;
+      do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+      return n.toFixed(1) + ' ' + u[i];
+    }
+
+    function fmtTime(d) {
+      if (!d) return '-';
+      const p = (x) => String(x).padStart(2, '0');
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+             ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    }
+
+    // Split "stream/sub/2026-06-30_14-30-00-000000.mp4" into stream + start Date.
+    function parseItem(it) {
+      const parts = it.path.split('/');
+      const file = parts.pop();
+      const stream = parts.join('/') || '(root)';
+      let start = null;
+      const m = file.match(/(\d{4})-(\d{2})-(\d{2})[_T](\d{2})-(\d{2})-(\d{2})/);
+      if (m) {
+        start = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+      } else if (it.mtime) {
+        start = new Date(it.mtime * 1000);
+      }
+      return { ...it, stream, start };
+    }
+
+    async function load() {
+      setStatus('Loading...');
+      rows.innerHTML = '';
+      try {
+        const res = await fetch('config.cgi?action=recordings', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        items = data.map(parseItem).sort((a, b) => (b.start || 0) - (a.start || 0));
+        populateStreams();
+        render();
+        setStatus(items.length + ' recording' + (items.length === 1 ? '' : 's'), 'ok');
+      } catch (e) {
+        setStatus('Load failed: ' + e.message, 'err');
+      }
+    }
+
+    function populateStreams() {
+      const cur = streamSel.value;
+      const names = [...new Set(items.map(i => i.stream))].sort();
+      streamSel.innerHTML = '<option value="">All</option>' +
+        names.map(n => `<option>${n}</option>`).join('');
+      if (names.includes(cur)) streamSel.value = cur;
+    }
+
+    function render() {
+      const stream = streamSel.value;
+      const from = fromEl.value ? new Date(fromEl.value) : null;
+      const to = toEl.value ? new Date(toEl.value) : null;
+      const filtered = items.filter(i => {
+        if (stream && i.stream !== stream) return false;
+        if (from && i.start && i.start < from) return false;
+        if (to && i.start && i.start > to) return false;
+        return true;
+      });
+      rows.innerHTML = '';
+      for (const it of filtered) {
+        const tr = document.createElement('tr');
+        const url = 'config.cgi?action=recording&file=' + encodeURIComponent(it.path);
+        tr.innerHTML =
+          `<td>${escapeHtml(it.stream)}</td>` +
+          `<td>${fmtTime(it.start)}</td>` +
+          `<td class="size">${fmtSize(it.size)}</td>` +
+          `<td class="actions"></td>`;
+        const actions = tr.querySelector('.actions');
+        const play = document.createElement('button');
+        play.textContent = 'Play';
+        play.className = 'primary';
+        play.onclick = () => playRecording(it, url);
+        const dl = document.createElement('a');
+        dl.textContent = 'Download';
+        dl.href = url;
+        dl.setAttribute('download', it.path.split('/').pop());
+        dl.style.marginLeft = '8px';
+        dl.style.fontSize = '12.5px';
+        actions.appendChild(play);
+        actions.appendChild(dl);
+        rows.appendChild(tr);
+      }
+      emptyEl.style.display = filtered.length ? 'none' : 'block';
+    }
+
+    function playRecording(it, url) {
+      playName.textContent = it.stream + '  -  ' + fmtTime(it.start);
+      player.src = url;
+      playerWrap.classList.add('open');
+      player.play().catch(() => {});
+      playerWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    document.getElementById('reload').onclick = load;
+    document.getElementById('clear').onclick = () => {
+      streamSel.value = ''; fromEl.value = ''; toEl.value = ''; render();
+    };
+    streamSel.onchange = render;
+    fromEl.onchange = render;
+    toEl.onchange = render;
+    document.getElementById('closePlayer').onclick = () => {
+      player.pause();
+      player.removeAttribute('src');
+      player.load();
+      playerWrap.classList.remove('open');
+    };
+
+    load();
+  </script>
+</body>
+</html>

@@ -23,6 +23,17 @@
   }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
   header .sub { font-size: 12px; opacity: .65; }
+  header nav { margin-left: auto; display: flex; gap: 4px; }
+  header nav a {
+    font-size: 12.5px;
+    text-decoration: none;
+    color: inherit;
+    padding: 5px 10px;
+    border: 1px solid rgba(128,128,128,.5);
+    border-radius: 6px;
+  }
+  header nav a.active { background: rgba(128,128,128,.18); font-weight: 600; }
+  header nav a:hover { background: rgba(128,128,128,.12); }
   .toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -50,18 +61,71 @@
   }
   .ok { color: #2a9d4a; }
   .err { color: #d9534f; }
-  #editor {
+
+  /* --- Editor --- */
+  .editorWrap {
     flex: 1 1 auto;
-    width: 100%;
-    border: 0;
-    padding: 12px 14px;
+    display: flex;
+    overflow: hidden;
+    position: relative;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12.5px;
-    line-height: 1.45;
-    resize: none;
-    tab-size: 2;
+    line-height: 1.5;
+  }
+  #gutter {
+    flex: 0 0 auto;
+    padding: 10px 8px 10px 12px;
+    margin: 0;
+    text-align: right;
+    color: rgba(128,128,128,.6);
+    background: rgba(128,128,128,.06);
+    border-right: 1px solid rgba(128,128,128,.25);
+    overflow: hidden;
     white-space: pre;
+    user-select: none;
+    min-width: 3.2em;
+  }
+  .codeArea { position: relative; flex: 1 1 auto; overflow: hidden; }
+  #highlight, #editor {
+    margin: 0;
+    border: 0;
+    padding: 10px 14px;
+    font: inherit;
+    line-height: inherit;
+    white-space: pre;
+    tab-size: 2;
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+  }
+  #highlight {
+    pointer-events: none;
+    color: inherit;
+  }
+  #editor {
+    background: transparent;
+    color: transparent;
+    caret-color: currentColor;
+    resize: none;
     outline: none;
+  }
+  #editor::selection { background: rgba(80,140,255,.35); }
+  /* token colors (tuned for light + dark) */
+  .c-comment { opacity: .5; font-style: italic; }
+  .c-key  { color: #2563eb; }
+  .c-punc { opacity: .6; }
+  .c-dash { color: #9333ea; }
+  .c-true { color: #16a34a; font-weight: 600; }
+  .c-false{ color: #dc2626; }
+  .c-num  { color: #b45309; }
+  .c-str  { color: #0891b2; }
+  @media (prefers-color-scheme: dark) {
+    .c-key  { color: #6ea8ff; }
+    .c-dash { color: #c995ff; }
+    .c-true { color: #4ade80; }
+    .c-false{ color: #f87171; }
+    .c-num  { color: #fbbf24; }
+    .c-str  { color: #38d6e6; }
   }
   #logWrap {
     border-top: 1px solid rgba(128,128,128,.35);
@@ -75,6 +139,10 @@
   <header>
     <h1>MediaMTX Configuration</h1>
     <span class="sub">Editing mediamtx.yml</span>
+    <nav>
+      <a href="index.html" class="active">Configuration</a>
+      <a href="recordings.html">Recordings</a>
+    </nav>
   </header>
 
   <div class="toolbar">
@@ -87,7 +155,15 @@
     <span id="status"></span>
   </div>
 
-  <textarea id="editor" spellcheck="false" placeholder="Loading configuration..."></textarea>
+  <div class="editorWrap">
+    <div id="gutter">1</div>
+    <div class="codeArea">
+      <pre id="highlight" aria-hidden="true"></pre>
+      <textarea id="editor" spellcheck="false" autocomplete="off"
+                autocapitalize="off" wrap="off"
+                placeholder="Loading configuration..."></textarea>
+    </div>
+  </div>
 
   <div id="logWrap">
     <iframe id="log" title="System log"></iframe>
@@ -95,10 +171,70 @@
 
   <script>
     const editor = document.getElementById('editor');
+    const highlight = document.getElementById('highlight');
+    const gutter = document.getElementById('gutter');
     const status = document.getElementById('status');
     const buttons = document.querySelectorAll('button');
     const logWrap = document.getElementById('logWrap');
     const logFrame = document.getElementById('log');
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    }
+
+    // Colorize a single YAML value (booleans, numbers/durations, strings).
+    function hlValue(v) {
+      if (v === '') return '';
+      const lead = v.match(/^\s*/)[0];
+      const trail = v.match(/\s*$/)[0];
+      const t = v.trim();
+      let cls = '';
+      if (/^(yes|true|on|enabled)$/i.test(t)) cls = 'c-true';
+      else if (/^(no|false|off|disabled)$/i.test(t)) cls = 'c-false';
+      else if (/^-?\d+(\.\d+)?[a-zA-Z%]*$/.test(t)) cls = 'c-num';
+      else if (/^["'].*["']$/.test(t)) cls = 'c-str';
+      if (!cls) return escapeHtml(v);
+      return escapeHtml(lead) + '<span class="' + cls + '">' + escapeHtml(t) +
+             '</span>' + escapeHtml(trail);
+    }
+
+    function hlLine(line) {
+      if (/^\s*#/.test(line)) return '<span class="c-comment">' + escapeHtml(line) + '</span>';
+      let code = line, comment = '';
+      const ci = line.search(/\s#/);
+      if (ci >= 0) { code = line.slice(0, ci); comment = line.slice(ci); }
+      let html;
+      const m = code.match(/^(\s*)(-\s+)?([^:\s][^:]*)(:)(\s*)(.*)$/);
+      if (m) {
+        html = escapeHtml(m[1]) +
+               (m[2] ? '<span class="c-dash">' + escapeHtml(m[2]) + '</span>' : '') +
+               '<span class="c-key">' + escapeHtml(m[3]) + '</span>' +
+               '<span class="c-punc">' + escapeHtml(m[4]) + '</span>' +
+               escapeHtml(m[5]) + hlValue(m[6]);
+      } else {
+        const lm = code.match(/^(\s*)(-\s+)(.*)$/);
+        html = lm
+          ? escapeHtml(lm[1]) + '<span class="c-dash">' + escapeHtml(lm[2]) + '</span>' + hlValue(lm[3])
+          : hlValue(code);
+      }
+      if (comment) html += '<span class="c-comment">' + escapeHtml(comment) + '</span>';
+      return html;
+    }
+
+    function render() {
+      const lines = editor.value.split('\n');
+      highlight.innerHTML = lines.map(hlLine).join('\n') + '\n';
+      let g = '';
+      for (let i = 1; i <= lines.length; i++) g += i + '\n';
+      gutter.textContent = g;
+      syncScroll();
+    }
+
+    function syncScroll() {
+      highlight.scrollTop = editor.scrollTop;
+      highlight.scrollLeft = editor.scrollLeft;
+      gutter.scrollTop = editor.scrollTop;
+    }
 
     function setStatus(msg, kind) {
       status.textContent = msg;
@@ -116,6 +252,7 @@
         const res = await fetch(url, { cache: 'no-store' });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         editor.value = await res.text();
+        render();
         setStatus(defaults ? 'Defaults loaded (not yet saved)' : 'Loaded', 'ok');
       } catch (e) {
         setStatus('Load failed: ' + e.message, 'err');
@@ -175,6 +312,20 @@
       e.target.textContent = open ? 'Hide log' : 'Show log';
       if (open) refreshLog();
     };
+
+    // Editor wiring: re-highlight on edit, keep overlay aligned on scroll,
+    // and insert spaces for Tab so YAML indentation stays intact.
+    editor.addEventListener('input', render);
+    editor.addEventListener('scroll', syncScroll);
+    editor.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const s = editor.selectionStart, en = editor.selectionEnd;
+        editor.value = editor.value.slice(0, s) + '  ' + editor.value.slice(en);
+        editor.selectionStart = editor.selectionEnd = s + 2;
+        render();
+      }
+    });
 
     load(false);
   </script>

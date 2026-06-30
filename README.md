@@ -24,8 +24,14 @@ streams from one end to the other.
 ## Features
 
 - Runs MediaMTX as a non-root ACAP (no root filesystem changes required).
-- **Built-in web configuration editor** — edit `mediamtx.yml` directly from the browser,
-  then save and restart the server to apply changes. No SSH or SFTP needed.
+- **Built-in web configuration editor** — edit `mediamtx.yml` directly from the browser
+  with YAML syntax highlighting (enabled `yes`/`true` values shown in green, disabled
+  `no`/`false` in red, dimmed comments, line numbers), then save and restart the server
+  to apply changes. No SSH or SFTP needed.
+- **Recordings browser** — list recorded segments with a date/time filter and play or
+  download them in the browser, served at `https://<device ip>/local/MediaMTX/recordings.html`.
+- **Upgrade-safe configuration** — your `mediamtx.yml` is stored in the app's persistent
+  `localdata` directory, so it is preserved when you update the ACAP to a newer version.
 - A working default configuration is installed automatically on first run.
 - **SD card recording** — the default `recordPath` points to the camera SD card
   (`/var/spool/storage/areas/SD_DISK/MediaMTX/...`); recording is disabled by default and
@@ -94,7 +100,19 @@ paths:
 
 makes the stream available at `rtsp://IPAddress:8554/proxied` with no authentication.
 
-When uninstalling the ACAP, all changes and files are removed from the camera.
+## Viewing recordings
+
+When recording is enabled for a path, segments are written to the storage location set by
+`recordPath` (the SD card by default; some recorder devices use an internal disk such as
+`HDD_DISK`). The **Recordings** page lists the recorded `.mp4` segments and lets you
+filter by stream and date/time, then play them inline or download them. Open it from the
+**Recordings** link in the settings page header, or browse to
+`https://<device ip>/local/MediaMTX/recordings.html`. Like the config editor, it is
+admin-access only.
+
+Your configuration is stored in the app's persistent `localdata` directory and is kept
+across application upgrades. Uninstalling the ACAP removes all files, including the
+configuration and any recordings stored under the app's recordings path.
 
 ## Build from source
 

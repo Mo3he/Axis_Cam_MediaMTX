@@ -1,9 +1,19 @@
 #!/bin/sh
 
 APPDIR="/usr/local/packages/MediaMTX"
-CONF="$APPDIR/mediamtx.yml"
+# Persistent storage that survives application upgrades.
+LOCALDATA="$APPDIR/localdata"
+CONF="$LOCALDATA/mediamtx.yml"
 
 echo "Starting Service"
+mkdir -p "$LOCALDATA"
+
+# Migrate a config from an older release that stored it in the app directory.
+if [ ! -f "$CONF" ] && [ -f "$APPDIR/mediamtx.yml" ]; then
+    echo "Migrating existing mediamtx.yml to localdata"
+    cp "$APPDIR/mediamtx.yml" "$CONF"
+fi
+
 if [ ! -f "$CONF" ]; then
     echo "No mediamtx.yml found, installing default configuration"
     cp "$APPDIR/mediamtx.defaults.yml" "$CONF"
