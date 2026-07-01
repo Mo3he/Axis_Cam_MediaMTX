@@ -61,7 +61,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid rgba(128,128,128,.2); }
   th { position: sticky; top: 0; background: Canvas; font-weight: 600; font-size: 12px; opacity: .8; }
-  td.size, td.dur, td.actions { white-space: nowrap; }
+  td.size, td.end, td.actions { white-space: nowrap; }
   tr:hover td { background: rgba(128,128,128,.08); }
   .empty { padding: 24px 14px; opacity: .6; font-size: 13px; }
   #playerWrap {
@@ -110,8 +110,8 @@
         <tr>
           <th>Stream</th>
           <th>Start time</th>
+          <th>End time</th>
           <th>Size</th>
-          <th>Duration</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -154,14 +154,6 @@
       return n.toFixed(1) + ' ' + u[i];
     }
 
-    function fmtDuration(s) {
-      if (!isFinite(s) || s <= 0) return '-';
-      s = Math.round(s);
-      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-      const p = (x) => String(x).padStart(2, '0');
-      return (h ? h + ':' + p(m) : m) + ':' + p(sec);
-    }
-
     function fmtTime(d) {
       if (!d) return '-';
       const p = (x) => String(x).padStart(2, '0');
@@ -181,7 +173,8 @@
       } else if (it.mtime) {
         start = new Date(it.mtime * 1000);
       }
-      return { ...it, stream, start };
+      const end = it.mtime ? new Date(it.mtime * 1000) : null;
+      return { ...it, stream, start, end };
     }
 
     async function load() {
@@ -225,8 +218,8 @@
         tr.innerHTML =
           `<td>${escapeHtml(it.stream)}</td>` +
           `<td>${fmtTime(it.start)}</td>` +
+          `<td class="end">${fmtTime(it.end)}</td>` +
           `<td class="size">${fmtSize(it.size)}</td>` +
-          `<td class="dur">${fmtDuration(it.dur)}</td>` +
           `<td class="actions"></td>`;
         const actions = tr.querySelector('.actions');
         const play = document.createElement('button');
