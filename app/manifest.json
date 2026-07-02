@@ -14,7 +14,7 @@
           "vendor": "Mo3he",
           "embeddedSdkVersion": "3.0",
           "vendorUrl": "https://github.com/Mo3he/Axis_Cam_MediaMTX",
-          "runMode": "once",
+          "runMode": "respawn",
           "version": "1.19.2"
         },
         "configuration":  {

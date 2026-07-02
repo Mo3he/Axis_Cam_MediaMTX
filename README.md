@@ -28,10 +28,19 @@ streams from one end to the other.
   with YAML syntax highlighting (enabled `yes`/`true` values shown in green, disabled
   `no`/`false` in red, dimmed comments, line numbers), then save and restart the server
   to apply changes. No SSH or SFTP needed.
-- **Recordings browser** — list recorded segments with a date/time filter and play or
-  download them in the browser, served at `https://<device ip>/local/MediaMTX/recordings.html`.
+- **Live view page** — lists the stream paths in your configuration with one-click
+  links to MediaMTX's built-in HLS and WebRTC players and copyable RTSP URLs, at
+  `https://<device ip>/local/MediaMTX/live.html`.
+- **Recordings browser** — list recorded segments with a date/time filter, play or
+  download them in the browser, delete individual segments, and see the storage
+  card's disk usage, served at `https://<device ip>/local/MediaMTX/recordings.html`.
 - **Upgrade-safe configuration** — your `mediamtx.yml` is stored in the app's persistent
   `localdata` directory, so it is preserved when you update the ACAP to a newer version.
+- **Config backup and crash-loop protection** — every save keeps a backup of the
+  previous configuration (restorable from the editor with **Load backup**), and after a
+  restart the editor watches the server and warns if the new configuration makes
+  MediaMTX crash-loop. The supervisor backs off instead of restarting a broken config
+  every second.
 - A working default configuration is installed automatically on first run.
 - **SD card recording** — the default `recordPath` points to the camera SD card
   (`/var/spool/storage/areas/SD_DISK/MediaMTX/...`); recording is disabled by default and
@@ -79,14 +88,27 @@ page, or browse to `https://<device ip>/local/MediaMTX/index.html`). The page pr
 full editor for `mediamtx.yml`:
 
 - **Reload** — reload the current configuration from the device.
-- **Save** — write your changes to `mediamtx.yml`.
-- **Save & Restart** — save and restart MediaMTX to apply the changes.
+- **Save** — write your changes to `mediamtx.yml` (the previous version is kept as a
+  backup).
+- **Save & Restart** — save and restart MediaMTX to apply the changes. The page then
+  watches the server for a few seconds and warns if the new configuration makes it
+  crash-loop.
 - **Load defaults** — load the bundled default configuration into the editor (not saved
   until you click Save).
+- **Load backup** — load the configuration as it was before the last save (not saved
+  until you click Save), for recovering from a bad edit.
 - **Show log** — view the application system log.
 
 The editor is admin-access only and authenticates against the device user pool, the same
 as VAPIX.
+
+## Viewing live streams
+
+The **Live** page (`https://<device ip>/local/MediaMTX/live.html`) lists every path in
+the configuration with links to MediaMTX's built-in HLS and WebRTC players and a
+copyable RTSP URL. The players are served by MediaMTX itself on their own ports (8888
+for HLS, 8889 for WebRTC by default), so they open in a new tab; make sure those ports
+are reachable from your browser.
 
 ### Example: allow anonymous viewing of an RTSP stream
 
@@ -105,8 +127,9 @@ makes the stream available at `rtsp://IPAddress:8554/proxied` with no authentica
 When recording is enabled for a path, segments are written to the storage location set by
 `recordPath` (the SD card by default; some recorder devices use an internal disk such as
 `HDD_DISK`). The **Recordings** page lists the recorded `.mp4` segments and lets you
-filter by stream and date/time, then play them inline or download them. Open it from the
-**Recordings** link in the settings page header, or browse to
+filter by stream and date/time, then play them inline, download them, or delete them.
+It also shows how full the recording storage is. Open it from the **Recordings** link
+in the settings page header, or browse to
 `https://<device ip>/local/MediaMTX/recordings.html`. Like the config editor, it is
 admin-access only.
 
@@ -120,16 +143,18 @@ The MediaMTX binary is **not** stored in this repository. It is downloaded from 
 official [bluenviron/mediamtx](https://github.com/bluenviron/mediamtx/releases) release
 and verified against its published `checksums.sha256` during the Docker build.
 
-From the directory of the architecture you want to build (`arm` or `aarch64`):
+Both architectures build from the single `Dockerfile` in the repository root; select
+one with the `ARCH` build argument (`aarch64` or `armv7hf`):
 
 ```
-docker build --tag <package name> .
+docker build --build-arg ARCH=aarch64 --tag <package name> .
 ```
 
-To build a specific MediaMTX version, pass the build argument (without the leading `v`):
+To build a specific MediaMTX version, pass the version build argument as well (without
+the leading `v`):
 
 ```
-docker build --build-arg MEDIAMTX_VERSION=1.19.2 --tag <package name> .
+docker build --build-arg ARCH=aarch64 --build-arg MEDIAMTX_VERSION=1.19.2 --tag <package name> .
 ```
 
 Then copy the resulting `.eap` out of the image, e.g.:
@@ -140,13 +165,29 @@ docker cp $(docker create <package name>):/opt/app ./build
 
 The `.eap` package is created under `/opt/app` inside the image.
 
+## Tests
+
+Host-side unit tests cover the MP4 box parsing used by the recordings player and the
+request helpers in `config.c`. They build against a stub FastCGI header, so no
+dependencies are needed:
+
+```
+cc -Wall -Wextra -Werror -fsanitize=address,undefined -Itests/fcgi_stub tests/test_mp4.c -o tests/test_mp4
+./tests/test_mp4
+```
+
+They also run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) on every
+push and pull request, together with a full Docker build of both architectures.
+
 ## Automated releases
 
 A GitHub Actions workflow
 ([`.github/workflows/build-on-mediamtx-release.yml`](.github/workflows/build-on-mediamtx-release.yml))
 runs daily, detects new upstream MediaMTX releases, bumps the packaged version, builds
 both architectures, and publishes a matching release with the `.eap` files attached. It
-can also be run manually from the Actions tab, optionally targeting a specific version.
+can also be run manually from the Actions tab, optionally targeting a specific version
+or, with the **force** option, rebuilding and republishing the current version after a
+packaging change.
 
 
 

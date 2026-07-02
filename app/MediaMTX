@@ -1,0 +1,65 @@
+#!/bin/sh
+
+APPDIR="/usr/local/packages/MediaMTX"
+# Persistent storage that survives application upgrades.
+LOCALDATA="$APPDIR/localdata"
+CONF="$LOCALDATA/mediamtx.yml"
+
+echo "Starting Service"
+mkdir -p "$LOCALDATA"
+
+# Migrate a config from an older release that stored it in the app directory.
+if [ ! -f "$CONF" ] && [ -f "$APPDIR/mediamtx.yml" ]; then
+    echo "Migrating existing mediamtx.yml to localdata"
+    cp "$APPDIR/mediamtx.yml" "$CONF"
+fi
+
+if [ ! -f "$CONF" ]; then
+    echo "No mediamtx.yml found, installing default configuration"
+    cp "$APPDIR/mediamtx.defaults.yml" "$CONF"
+fi
+
+# Start the configuration web backend (FastCGI), reachable at
+# /local/MediaMTX/config.cgi via the device web server.
+if [ -x "$APPDIR/config.cgi" ]; then
+    "$APPDIR/config.cgi" &
+fi
+
+echo "Service Started"
+
+# Supervise MediaMTX: relaunch it whenever it exits. The config backend
+# triggers a restart by sending SIGTERM to the pid recorded below.
+#
+# A broken config makes MediaMTX exit immediately, so back off after repeated
+# quick exits instead of hammering a 1s loop forever. The consecutive-failure
+# count is written to mediamtx.fails, where config.cgi?action=status reads it
+# so the web UI can warn about a crash-looping config.
+FAILS=0
+echo "$FAILS" > "$APPDIR/mediamtx.fails"
+while true; do
+    # Re-read the counter so a deliberate restart (config.cgi zeroes this file)
+    # clears stale crash history even while we are backing off from a crash-loop.
+    FAILS=$(cat "$APPDIR/mediamtx.fails" 2>/dev/null || echo 0)
+    case "$FAILS" in ''|*[!0-9]*) FAILS=0 ;; esac
+    STARTED=$(date +%s)
+    "$APPDIR/lib/mediamtx" "$CONF" &
+    MTX_PID=$!
+    echo "$MTX_PID" > "$APPDIR/mediamtx.pid"
+    wait "$MTX_PID"
+    CODE=$?
+    UPTIME=$(( $(date +%s) - STARTED ))
+    # MediaMTX exits 0 on SIGTERM (the config backend's restart request) and on
+    # any clean shutdown, so a zero exit is never a crash regardless of uptime.
+    # A broken config exits non-zero within seconds; only that counts as a fail.
+    if [ "$CODE" -eq 0 ] || [ "$UPTIME" -ge 30 ]; then
+        FAILS=0   # clean/deliberate exit, or ran long enough to be healthy
+    else
+        FAILS=$((FAILS + 1))
+    fi
+    echo "$FAILS" > "$APPDIR/mediamtx.fails"
+    DELAY=1
+    [ "$FAILS" -ge 3 ] && DELAY=10
+    [ "$FAILS" -ge 10 ] && DELAY=60
+    echo "MediaMTX exited (code $CODE, uptime ${UPTIME}s), restarting in ${DELAY}s"
+    sleep "$DELAY"
+done

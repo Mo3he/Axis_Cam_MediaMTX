@@ -5,11 +5,15 @@
  *
  *   GET  config.cgi                   -> return current mediamtx.yml (text/plain)
  *   GET  config.cgi?action=defaults   -> return bundled mediamtx.defaults.yml
+ *   GET  config.cgi?action=backup     -> return previous mediamtx.yml (pre-save)
+ *   GET  config.cgi?action=status     -> JSON: MediaMTX running / crash count
+ *   GET  config.cgi?action=storage    -> JSON: recordings disk usage
  *   GET  config.cgi?action=recordings -> JSON list of recorded .mp4 segments
  *   GET  config.cgi?action=fragidx&file=<rel>   -> fragment index for MSE
  *   GET  config.cgi?action=recording&file=<rel> -> stream a recording (Range)
  *   POST config.cgi                   -> overwrite mediamtx.yml with request body
  *   POST config.cgi?action=restart    -> restart the MediaMTX process
+ *   POST config.cgi?action=delete&file=<rel>    -> delete a recording
  */
 
 #define _FILE_OFFSET_BITS 64
@@ -25,6 +29,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <syslog.h>
 #include <unistd.h>
@@ -34,7 +39,9 @@
 #define CONF_FILE    LOCALDATA "/mediamtx.yml"
 #define DEFAULT_FILE APPDIR "/mediamtx.defaults.yml"
 #define PID_FILE     APPDIR "/mediamtx.pid"
+#define FAILS_FILE   APPDIR "/mediamtx.fails"
 #define TMP_FILE     LOCALDATA "/mediamtx.yml.tmp"
+#define BAK_FILE     LOCALDATA "/mediamtx.yml.bak"
 
 #define RECORD_BASE_DEFAULT "/var/spool/storage/areas/SD_DISK/MediaMTX/recordings"
 
@@ -68,6 +75,42 @@ static void send_json(FCGX_Request* r, const char* status, const char* json) {
                  json);
 }
 
+/* CSRF guard for state-changing requests. The device authenticates with
+ * ambient credentials (Basic/Digest), which browsers attach to cross-origin
+ * form posts too, so a malicious page visited by a logged-in admin could
+ * otherwise rewrite the config. Browsers always send Origin (or at least
+ * Referer) on POST; when one is present it must match the Host we were
+ * reached on. Requests with neither header (curl, scripts) pass. */
+static int same_origin(FCGX_Request* r) {
+    const char* host = FCGX_GetParam("HTTP_HOST", r->envp);
+    if (!host || !*host)
+        return 1; /* nothing to compare against */
+    const char* src = FCGX_GetParam("HTTP_ORIGIN", r->envp);
+    if (!src || !*src)
+        src = FCGX_GetParam("HTTP_REFERER", r->envp);
+    if (!src || !*src)
+        return 1; /* non-browser client */
+    const char* p = strstr(src, "://");
+    p             = p ? p + 3 : src;
+    size_t hl     = strlen(host);
+    if (strncmp(p, host, hl) != 0)
+        return 0;
+    return p[hl] == '\0' || p[hl] == '/';
+}
+
+/* Clear the supervisor's consecutive-failure counter. A deliberate restart
+ * means the admin is applying a (possibly fixed) config, so past crash history
+ * is no longer relevant and the web UI should judge the new config fresh. The
+ * supervisor re-reads this file at the top of each loop, so the reset sticks
+ * even when it is currently backing off from a crash-loop. */
+static void reset_failcount(void) {
+    FILE* f = fopen(FAILS_FILE, "w");
+    if (f) {
+        fputs("0\n", f);
+        fclose(f);
+    }
+}
+
 /* Restart MediaMTX by signaling the pid written by the startup script.
  * The supervising loop in the startup script relaunches it. */
 static int restart_mediamtx(void) {
@@ -79,11 +122,38 @@ static int restart_mediamtx(void) {
     fclose(f);
     if (matched != 1 || pid <= 1)
         return -1;
+    reset_failcount();
     if (kill((pid_t)pid, SIGTERM) != 0) {
+        /* ESRCH: MediaMTX has already exited (e.g. crash-looping and currently
+         * in the supervisor's backoff sleep). The supervisor will relaunch the
+         * current config on its next cycle, so the restart is still honored. */
+        if (errno == ESRCH)
+            return 0;
         syslog(LOG_ERR, "failed to signal pid %ld: %s", pid, strerror(errno));
         return -1;
     }
     return 0;
+}
+
+/* Keep a copy of the current config so a bad save can be recovered from the
+ * web UI (GET action=backup). Best effort: a failed backup never blocks the
+ * save itself. */
+static void backup_config(void) {
+    FILE* in = fopen(CONF_FILE, "rb");
+    if (!in)
+        return;
+    FILE* out = fopen(BAK_FILE, "wb");
+    if (!out) {
+        fclose(in);
+        return;
+    }
+    char   buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+        if (fwrite(buf, 1, n, out) != n)
+            break;
+    fclose(in);
+    fclose(out);
 }
 
 /* Stream the POST body to a temp file then atomically replace mediamtx.yml. */
@@ -126,6 +196,7 @@ static int save_config(FCGX_Request* r) {
     }
     fclose(f);
 
+    backup_config(); /* only after the new config arrived intact */
     if (rename(TMP_FILE, CONF_FILE) != 0) {
         syslog(LOG_ERR, "rename to %s failed: %s", CONF_FILE, strerror(errno));
         return -1;
@@ -164,6 +235,53 @@ static void get_record_base(char* out, size_t outsz) {
     }
     if (out[0] == '\0')
         snprintf(out, outsz, "%s", RECORD_BASE_DEFAULT);
+}
+
+/* Report whether MediaMTX is running and how often it has crashed recently.
+ * The pid comes from the file the supervisor writes; the consecutive-failure
+ * count is maintained by the supervisor loop in the startup script. The web
+ * UI polls this after a restart to detect a config that crash-loops. */
+static void send_status(FCGX_Request* r) {
+    long  pid = 0;
+    FILE* f   = fopen(PID_FILE, "r");
+    if (f) {
+        if (fscanf(f, "%ld", &pid) != 1)
+            pid = 0;
+        fclose(f);
+    }
+    int running = pid > 1 && kill((pid_t)pid, 0) == 0;
+
+    int failures = 0;
+    f            = fopen(FAILS_FILE, "r");
+    if (f) {
+        if (fscanf(f, "%d", &failures) != 1)
+            failures = 0;
+        fclose(f);
+    }
+
+    FCGX_FPrintF(r->out,
+                 "Content-Type: application/json\r\n"
+                 "Cache-Control: no-store\r\n\r\n"
+                 "{\"ok\":true,\"running\":%s,\"failures\":%d}",
+                 running ? "true" : "false",
+                 failures);
+}
+
+/* Disk usage of the filesystem holding the recordings directory. */
+static void send_storage(FCGX_Request* r, const char* base) {
+    struct statvfs vfs;
+    if (statvfs(base, &vfs) != 0) {
+        send_json(r, "200 OK", "{\"ok\":false,\"error\":\"storage unavailable\"}");
+        return;
+    }
+    unsigned long long total = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
+    unsigned long long avail = (unsigned long long)vfs.f_bavail * vfs.f_frsize;
+    FCGX_FPrintF(r->out,
+                 "Content-Type: application/json\r\n"
+                 "Cache-Control: no-store\r\n\r\n"
+                 "{\"ok\":true,\"total\":%llu,\"free\":%llu}",
+                 total,
+                 avail);
 }
 
 /* Write a JSON-escaped string (without surrounding quotes) to the stream. */
@@ -880,6 +998,26 @@ static void send_recording(FCGX_Request* r, const char* base, const char* file) 
     fclose(f);
 }
 
+/* Delete a single recording. The path is confined to the recordings base
+ * directory by resolve_recording(), same as playback. */
+static void delete_recording(FCGX_Request* r, const char* base, const char* file) {
+    char realfull[PATH_MAX];
+    if (resolve_recording(r, base, file, realfull) != 0)
+        return;
+    struct stat st;
+    if (stat(realfull, &st) != 0 || !S_ISREG(st.st_mode)) {
+        send_json(r, "404 Not Found", "{\"ok\":false,\"error\":\"not found\"}");
+        return;
+    }
+    if (unlink(realfull) != 0) {
+        syslog(LOG_ERR, "delete %s failed: %s", realfull, strerror(errno));
+        send_json(r, "500 Internal Server Error",
+                  "{\"ok\":false,\"error\":\"delete failed\"}");
+        return;
+    }
+    send_json(r, "200 OK", "{\"ok\":true,\"action\":\"delete\"}");
+}
+
 int main(void) {
     openlog("mediamtx_config", LOG_PID, LOG_USER);
 
@@ -905,7 +1043,10 @@ int main(void) {
         syslog(LOG_ERR, "FCGX_OpenSocket failed");
         return EXIT_FAILURE;
     }
-    chmod(socket_path, S_IRWXU | S_IRWXG | S_IRWXO);
+    /* The device web server runs as a different user and needs write access
+     * to connect; execute bits are meaningless on a socket, so drop them. */
+    chmod(socket_path,
+          S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
 
     FCGX_Request request;
     if (FCGX_InitRequest(&request, sock, 0) != 0) {
@@ -924,6 +1065,14 @@ int main(void) {
         if (strcmp(method, "GET") == 0) {
             if (strstr(query, "action=defaults")) {
                 send_text_file(&request, DEFAULT_FILE);
+            } else if (strstr(query, "action=backup")) {
+                send_text_file(&request, BAK_FILE);
+            } else if (strstr(query, "action=status")) {
+                send_status(&request);
+            } else if (strstr(query, "action=storage")) {
+                char base[PATH_MAX];
+                get_record_base(base, sizeof(base));
+                send_storage(&request, base);
             } else if (strstr(query, "action=recordings")) {
                 char base[PATH_MAX];
                 get_record_base(base, sizeof(base));
@@ -953,13 +1102,24 @@ int main(void) {
                 send_text_file(&request, CONF_FILE);
             }
         } else if (strcmp(method, "POST") == 0) {
-            if (strstr(query, "action=restart")) {
+            if (!same_origin(&request)) {
+                send_json(&request, "403 Forbidden",
+                          "{\"ok\":false,\"error\":\"cross-origin request rejected\"}");
+            } else if (strstr(query, "action=restart")) {
                 if (restart_mediamtx() == 0)
                     send_json(&request, "200 OK", "{\"ok\":true,\"action\":\"restart\"}");
                 else
                     send_json(&request,
                               "500 Internal Server Error",
                               "{\"ok\":false,\"error\":\"restart failed\"}");
+            } else if (strstr(query, "action=delete")) {
+                char base[PATH_MAX], file[PATH_MAX];
+                get_record_base(base, sizeof(base));
+                if (query_param(query, "file", file, sizeof(file)))
+                    delete_recording(&request, base, file);
+                else
+                    send_json(&request, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"missing file\"}");
             } else {
                 if (save_config(&request) == 0)
                     send_json(&request, "200 OK", "{\"ok\":true,\"action\":\"save\"}");

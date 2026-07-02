@@ -1,0 +1,35 @@
+name: CI
+
+# Catches regressions before the daily release workflow hits them:
+# - unit tests for the MP4/box parsing and request helpers in config.c,
+#   run with Address/UB sanitizers against a stub FastCGI header
+# - a full ACAP docker build of both architectures
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run unit tests (ASan/UBSan)
+        run: |
+          set -euo pipefail
+          cc -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+             -Itests/fcgi_stub tests/test_mp4.c -o tests/test_mp4
+          ./tests/test_mp4
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [aarch64, armv7hf]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.arch }} package
+        run: docker build --build-arg ARCH=${{ matrix.arch }} --tag mediamtx-${{ matrix.arch }} .

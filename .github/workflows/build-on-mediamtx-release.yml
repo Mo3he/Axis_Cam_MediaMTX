@@ -5,9 +5,10 @@ name: Build on MediaMTX release
 #
 # - Runs daily and can be triggered manually.
 # - Compares the latest upstream MediaMTX version to the version currently
-#   recorded in the manifests. If they differ, it bumps the version, builds
-#   both architectures, commits the bump, and publishes a GitHub release with
-#   the two .eap packages attached.
+#   recorded in the manifest. If they differ (or "force" is set, e.g. after a
+#   packaging fix that needs a rebuild of the same MediaMTX version), it bumps
+#   the version, builds both architectures, commits the bump, and publishes a
+#   GitHub release with the two .eap packages attached.
 
 on:
   schedule:
@@ -17,6 +18,10 @@ on:
       version:
         description: "MediaMTX version to build (without leading v), e.g. 1.20.0. Leave empty to use the latest upstream release."
         required: false
+      force:
+        description: "Rebuild and republish even if the packaged version already matches (refreshes the release assets)."
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -39,6 +44,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_FORCE: ${{ github.event.inputs.force }}
         run: |
           set -euo pipefail
           if [ -n "${INPUT_VERSION:-}" ]; then
@@ -47,10 +53,10 @@ jobs:
             latest=$(gh release view --repo bluenviron/mediamtx --json tagName --jq .tagName)
             latest="${latest#v}"
           fi
-          current=$(grep -oE '"version": "[0-9.]+"' aarch64/app/manifest.json | grep -oE '[0-9.]+' | head -1)
+          current=$(grep -oE '"version": "[0-9.]+"' app/manifest.json | grep -oE '[0-9.]+' | head -1)
           echo "Latest upstream: $latest | Current packaged: $current"
           echo "version=$latest" >> "$GITHUB_OUTPUT"
-          if [ "$latest" != "$current" ]; then
+          if [ "$latest" != "$current" ] || [ "${INPUT_FORCE:-false}" = "true" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -66,25 +72,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bump version in manifests and README
+      - name: Bump version in manifest and README
         run: |
           set -euo pipefail
           V="$VERSION"
-          for m in aarch64/app/manifest.json arm/app/manifest.json; do
-            sed -i -E 's/"version": "[0-9.]+"/"version": "'"$V"'"/' "$m"
-          done
+          sed -i -E 's/"version": "[0-9.]+"/"version": "'"$V"'"/' app/manifest.json
           sed -i -E 's/Current version: \*\*[0-9.]+\*\* \(MediaMTX v[0-9.]+\)/Current version: **'"$V"'** (MediaMTX v'"$V"')/' README.md
 
       - name: Build aarch64 package
-        run: docker build --build-arg MEDIAMTX_VERSION="$VERSION" --tag mediamtx-aarch64 ./aarch64
+        run: docker build --build-arg ARCH=aarch64 --build-arg MEDIAMTX_VERSION="$VERSION" --tag mediamtx-aarch64 .
 
       - name: Build armv7hf package
-        run: docker build --build-arg MEDIAMTX_VERSION="$VERSION" --tag mediamtx-arm ./arm
+        run: docker build --build-arg ARCH=armv7hf --build-arg MEDIAMTX_VERSION="$VERSION" --tag mediamtx-armv7hf .
 
       - name: Extract .eap packages
         run: |
           set -euo pipefail
-          for img in mediamtx-aarch64 mediamtx-arm; do
+          for img in mediamtx-aarch64 mediamtx-armv7hf; do
             id=$(docker create "$img")
             docker cp "$id:/opt/app" "out-$img"
             docker rm "$id" >/dev/null
@@ -97,7 +101,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add aarch64/app/manifest.json arm/app/manifest.json README.md
+          git add app/manifest.json README.md
           if git diff --cached --quiet; then
             echo "No version changes to commit."
           else

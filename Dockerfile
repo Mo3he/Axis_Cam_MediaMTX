@@ -1,15 +1,21 @@
 # Global build arguments (must be declared before the first FROM to be usable in
 # the second stage's FROM line).
+#
+# Build either architecture from this single Dockerfile:
+#   docker build --build-arg ARCH=aarch64 --tag mediamtx-aarch64 .
+#   docker build --build-arg ARCH=armv7hf --tag mediamtx-armv7hf .
 ARG ARCH=aarch64
 ARG VERSION=12.9.0
 ARG UBUNTU_VERSION=24.04
 ARG REPO=axisecp
 ARG SDK=acap-native-sdk
 ARG MEDIAMTX_VERSION=1.19.2
-ARG MEDIAMTX_ARCH=linux_arm64
+# Upstream MediaMTX release architecture; derived from ARCH when left empty.
+ARG MEDIAMTX_ARCH=
 
 # --- Stage 1: download and verify the MediaMTX release binary ---
 FROM ubuntu:24.04 AS fetch
+ARG ARCH
 ARG MEDIAMTX_VERSION
 ARG MEDIAMTX_ARCH
 RUN apt-get update \
@@ -17,8 +23,16 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /dl
 RUN set -eux; \
+    arch="${MEDIAMTX_ARCH}"; \
+    if [ -z "$arch" ]; then \
+        case "$ARCH" in \
+            aarch64) arch=linux_arm64 ;; \
+            armv7hf) arch=linux_armv7 ;; \
+            *) echo "unsupported ARCH '$ARCH' (use aarch64 or armv7hf)" >&2; exit 1 ;; \
+        esac; \
+    fi; \
     base="https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}"; \
-    file="mediamtx_v${MEDIAMTX_VERSION}_${MEDIAMTX_ARCH}.tar.gz"; \
+    file="mediamtx_v${MEDIAMTX_VERSION}_${arch}.tar.gz"; \
     curl -fsSL -o "$file" "$base/$file"; \
     curl -fsSL -o checksums.sha256 "$base/checksums.sha256"; \
     grep -F "$file" checksums.sha256 | sha256sum --check -; \

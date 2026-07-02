@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediaMTX Live</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(128,128,128,.35);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { font-size: 12px; opacity: .65; }
+  header nav { margin-left: auto; display: flex; gap: 4px; }
+  header nav a {
+    font-size: 12.5px;
+    text-decoration: none;
+    color: inherit;
+    padding: 5px 10px;
+    border: 1px solid rgba(128,128,128,.5);
+    border-radius: 6px;
+  }
+  header nav a.active { background: rgba(128,128,128,.18); font-weight: 600; }
+  header nav a:hover { background: rgba(128,128,128,.12); }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(128,128,128,.35);
+    align-items: center;
+  }
+  button, a.btn {
+    font: inherit;
+    font-size: 12.5px;
+    padding: 6px 12px;
+    border: 1px solid rgba(128,128,128,.5);
+    border-radius: 6px;
+    background: rgba(128,128,128,.08);
+    cursor: pointer;
+    color: inherit;
+    text-decoration: none;
+    display: inline-block;
+  }
+  button:hover, a.btn:hover { background: rgba(128,128,128,.18); }
+  #status { margin-left: auto; font-size: 12.5px; min-height: 18px; }
+  .ok { color: #2a9d4a; }
+  .err { color: #d9534f; }
+  main { flex: 1 1 auto; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid rgba(128,128,128,.2); }
+  th { position: sticky; top: 0; background: Canvas; font-weight: 600; font-size: 12px; opacity: .8; }
+  tr:hover td { background: rgba(128,128,128,.08); }
+  td.name { font-weight: 600; }
+  td.rtsp { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  td .wild { opacity: .6; font-size: 12px; }
+  .empty, .note { padding: 14px; font-size: 13px; opacity: .7; }
+  .note { border-bottom: 1px solid rgba(128,128,128,.2); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>MediaMTX Live</h1>
+    <span class="sub">Configured stream paths</span>
+    <nav>
+      <a href="index.html">Configuration</a>
+      <a href="live.html" class="active">Live</a>
+      <a href="recordings.html">Recordings</a>
+    </nav>
+  </header>
+
+  <div class="toolbar">
+    <button id="reload">Refresh</button>
+    <span id="status"></span>
+  </div>
+
+  <main>
+    <div class="note">
+      The HLS and WebRTC players are served by MediaMTX itself on separate
+      ports, so they open in a new tab. If this page is loaded over HTTPS and
+      the players over plain HTTP, the browser may warn about the mixed
+      protocols; the RTSP URL can be pasted into VLC or similar.
+    </div>
+    <table id="table">
+      <thead>
+        <tr>
+          <th>Path</th>
+          <th>Players</th>
+          <th>RTSP URL</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none">
+      No paths configured. Add entries under <code>paths:</code> on the
+      Configuration page.
+    </div>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const rows = document.getElementById('rows');
+    const emptyEl = document.getElementById('empty');
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg;
+      statusEl.className = kind || '';
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // Minimal reading of mediamtx.yml: top-level scalar settings plus the
+    // names directly under "paths:". Good enough for a plain (non-anchored,
+    // non-flow) config, which is what the bundled default and the editor
+    // produce.
+    function parseConfig(text) {
+      const cfg = { settings: {}, paths: [] };
+      const lines = text.split('\n');
+      let inPaths = false;
+      for (const raw of lines) {
+        if (/^\s*(#|$)/.test(raw)) continue;
+        const top = raw.match(/^([A-Za-z][A-Za-z0-9]*):\s*(.*?)\s*(#.*)?$/);
+        if (top) {
+          inPaths = top[1] === 'paths';
+          if (!inPaths) cfg.settings[top[1]] = top[2];
+          continue;
+        }
+        if (inPaths) {
+          const p = raw.match(/^  ([^\s:][^:]*):\s*$/) ||
+                    raw.match(/^  ([^\s:][^:]*):\s+\S/) ||
+                    raw.match(/^  '([^']+)':/) || raw.match(/^  "([^"]+)":/);
+          if (p) cfg.paths.push(p[1]);
+        }
+      }
+      return cfg;
+    }
+
+    function port(addr, fallback) {
+      if (!addr) return fallback;
+      const m = String(addr).match(/:(\d+)\s*$/);
+      return m ? m[1] : fallback;
+    }
+
+    function enabled(v) {
+      return !/^(no|false|off|0)$/i.test(String(v || 'yes').trim());
+    }
+
+    async function load() {
+      setStatus('Loading...');
+      rows.innerHTML = '';
+      try {
+        const res = await fetch('config.cgi', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const cfg = parseConfig(await res.text());
+        renderPaths(cfg);
+        setStatus(cfg.paths.length + ' path' + (cfg.paths.length === 1 ? '' : 's'), 'ok');
+      } catch (e) {
+        setStatus('Load failed: ' + e.message, 'err');
+      }
+    }
+
+    function renderPaths(cfg) {
+      const host = location.hostname;
+      const s = cfg.settings;
+      const hlsOn = enabled(s.hls);
+      const webrtcOn = enabled(s.webrtc);
+      const rtspOn = enabled(s.rtsp);
+      // Encryption defaults to off in MediaMTX, unlike the servers themselves.
+      const hlsProto = enabled(s.hlsEncryption || 'no') ? 'https' : 'http';
+      const webrtcProto = enabled(s.webrtcEncryption || 'no') ? 'https' : 'http';
+      const hlsPort = port(s.hlsAddress, '8888');
+      const webrtcPort = port(s.webrtcAddress, '8889');
+      const rtspPort = port(s.rtspAddress, '8554');
+
+      rows.innerHTML = '';
+      for (const name of cfg.paths) {
+        const tr = document.createElement('tr');
+        const wildcard = name === 'all_others' || name.startsWith('~');
+        const td = (html) => { const t = document.createElement('td'); t.innerHTML = html; return t; };
+        const nameTd = td(escapeHtml(name));
+        nameTd.className = 'name';
+        tr.appendChild(nameTd);
+
+        const players = document.createElement('td');
+        if (wildcard) {
+          players.innerHTML = '<span class="wild">wildcard — stream names depend on publishers</span>';
+        } else {
+          if (hlsOn) {
+            const a = document.createElement('a');
+            a.className = 'btn';
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.href = hlsProto + '://' + host + ':' + hlsPort + '/' + encodeURIComponent(name) + '/';
+            a.textContent = 'HLS';
+            players.appendChild(a);
+          }
+          if (webrtcOn) {
+            const a = document.createElement('a');
+            a.className = 'btn';
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.style.marginLeft = '6px';
+            a.href = webrtcProto + '://' + host + ':' + webrtcPort + '/' + encodeURIComponent(name) + '/';
+            a.textContent = 'WebRTC';
+            players.appendChild(a);
+          }
+          if (!hlsOn && !webrtcOn)
+            players.innerHTML = '<span class="wild">HLS and WebRTC disabled in config</span>';
+        }
+        tr.appendChild(players);
+
+        const rtspTd = document.createElement('td');
+        rtspTd.className = 'rtsp';
+        if (rtspOn && !wildcard) {
+          const url = 'rtsp://' + host + ':' + rtspPort + '/' + name;
+          rtspTd.textContent = url;
+          const copy = document.createElement('button');
+          copy.textContent = 'Copy';
+          copy.style.marginLeft = '8px';
+          copy.onclick = async () => {
+            try {
+              await navigator.clipboard.writeText(url);
+              setStatus('RTSP URL copied', 'ok');
+            } catch (e) {
+              setStatus('Copy failed — select the URL manually', 'err');
+            }
+          };
+          rtspTd.appendChild(copy);
+        } else {
+          rtspTd.innerHTML = '<span class="wild">' + (rtspOn ? '—' : 'RTSP disabled') + '</span>';
+        }
+        tr.appendChild(rtspTd);
+        rows.appendChild(tr);
+      }
+      emptyEl.style.display = cfg.paths.length ? 'none' : 'block';
+    }
+
+    document.getElementById('reload').onclick = load;
+    load();
+  </script>
+</body>
+</html>

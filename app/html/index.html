@@ -144,6 +144,7 @@
     <span class="sub">Editing mediamtx.yml</span>
     <nav>
       <a href="index.html" class="active">Configuration</a>
+      <a href="live.html">Live</a>
       <a href="recordings.html">Recordings</a>
     </nav>
   </header>
@@ -154,6 +155,7 @@
     <button id="saveRestart" class="primary">Save &amp; Restart</button>
     <button id="restart" class="warn">Restart</button>
     <button id="defaults">Load defaults</button>
+    <button id="backup">Load backup</button>
     <button id="toggleLog">Show log</button>
     <span id="status"></span>
   </div>
@@ -247,16 +249,22 @@
       buttons.forEach(b => b.disabled = on);
     }
 
-    async function load(defaults) {
+    // source: '' = current config, 'defaults' or 'backup' = alternate copies
+    // loaded into the editor without saving.
+    async function load(source) {
       busy(true);
-      setStatus(defaults ? 'Loading defaults...' : 'Loading...');
+      setStatus(source ? 'Loading ' + source + '...' : 'Loading...');
       try {
-        const url = defaults ? 'config.cgi?action=defaults' : 'config.cgi';
+        const url = source ? 'config.cgi?action=' + source : 'config.cgi';
         const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) {
+          if (source === 'backup' && res.status === 404)
+            throw new Error('no backup yet (created on first save)');
+          throw new Error('HTTP ' + res.status);
+        }
         editor.value = await res.text();
         render();
-        setStatus(defaults ? 'Defaults loaded (not yet saved)' : 'Loaded', 'ok');
+        setStatus(source ? source + ' loaded (not yet saved)' : 'Loaded', 'ok');
       } catch (e) {
         setStatus('Load failed: ' + e.message, 'err');
       } finally {
@@ -292,6 +300,7 @@
         if (!res.ok) throw new Error('HTTP ' + res.status);
         setStatus('Restart requested', 'ok');
         refreshLog();
+        pollHealth();
       } catch (e) {
         setStatus('Restart failed: ' + e.message, 'err');
       } finally {
@@ -299,18 +308,47 @@
       }
     }
 
+    // After a restart, watch the supervisor's status for a few seconds. A bad
+    // config makes MediaMTX exit immediately and the failure counter climb.
+    async function pollHealth() {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      await sleep(1500);
+      for (let i = 0; i < 8; i++) {
+        let st = null;
+        try {
+          const res = await fetch('config.cgi?action=status', { cache: 'no-store' });
+          st = await res.json();
+        } catch (e) { /* transient; keep polling */ }
+        if (st && st.ok) {
+          if (st.failures >= 2) {
+            setStatus('MediaMTX keeps crashing — check the config ' +
+                      '(Load backup restores the previous version) and the log.',
+                      'err');
+            return;
+          }
+          if (st.running && i >= 1) {
+            setStatus('MediaMTX restarted and running', 'ok');
+            return;
+          }
+        }
+        await sleep(1000);
+      }
+      setStatus('Restart requested (could not confirm MediaMTX is running — see log)');
+    }
+
     function refreshLog() {
       logFrame.src = 'about:blank';
       logFrame.src = '/axis-cgi/admin/systemlog.cgi?appname=MediaMTX';
     }
 
-    document.getElementById('reload').onclick = () => load(false);
+    document.getElementById('reload').onclick = () => load('');
     document.getElementById('save').onclick = () => save();
     document.getElementById('saveRestart').onclick = async () => {
       if (await save()) await restart();
     };
     document.getElementById('restart').onclick = () => restart();
-    document.getElementById('defaults').onclick = () => load(true);
+    document.getElementById('defaults').onclick = () => load('defaults');
+    document.getElementById('backup').onclick = () => load('backup');
     document.getElementById('toggleLog').onclick = (e) => {
       const open = logWrap.classList.toggle('open');
       e.target.textContent = open ? 'Hide log' : 'Show log';
@@ -343,7 +381,7 @@
       }
     });
 
-    load(false);
+    load('');
   </script>
 </body>
 </html>
