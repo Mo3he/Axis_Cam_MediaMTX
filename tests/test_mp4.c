@@ -352,6 +352,80 @@ static int test_detect_codecs(void) {
     return 0;
 }
 
+static int test_raw_params(void) {
+    char out[128];
+
+    /* raw extraction keeps percent-encoding intact */
+    CHECK(query_param_raw("action=clip&start=2026-07-02T12%3A00%3A00Z", "start",
+                          out, sizeof(out)) == 1);
+    CHECK(strcmp(out, "2026-07-02T12%3A00%3A00Z") == 0);
+
+    CHECK(query_param_raw("a=1&b=2", "c", out, sizeof(out)) == 0);
+
+    CHECK(is_safe_rawparam("2026-07-02T12%3A00%3A00Z") == 1);
+    CHECK(is_safe_rawparam("cam1/sub") == 1);
+    CHECK(is_safe_rawparam("3599.5") == 1);
+    CHECK(is_safe_rawparam("") == 0);
+    /* characters that could corrupt the upstream request line */
+    CHECK(is_safe_rawparam("a b") == 0);
+    CHECK(is_safe_rawparam("a\r\nX-Evil: 1") == 0);
+    CHECK(is_safe_rawparam("a&b=c") == 0);
+    CHECK(is_safe_rawparam("a?b") == 0);
+
+    return 0;
+}
+
+static int test_conf_scalar_line(void) {
+    char out[128];
+
+    CHECK(conf_scalar_line("playback: yes\n", "playback", out, sizeof(out)) == 1);
+    CHECK(strcmp(out, "yes") == 0);
+
+    CHECK(conf_scalar_line("playbackAddress: 127.0.0.1:9996\n", "playbackAddress",
+                           out, sizeof(out)) == 1);
+    CHECK(strcmp(out, "127.0.0.1:9996") == 0);
+
+    /* trailing comments and whitespace are stripped */
+    CHECK(conf_scalar_line("playback: no   # keep off\n", "playback", out,
+                           sizeof(out)) == 1);
+    CHECK(strcmp(out, "no") == 0);
+
+    /* quoted values lose the quotes */
+    CHECK(conf_scalar_line("logFile: \"med.log\"\n", "logFile", out,
+                           sizeof(out)) == 1);
+    CHECK(strcmp(out, "med.log") == 0);
+
+    /* key must match exactly: "playback" must not match "playbackAddress" */
+    CHECK(conf_scalar_line("playbackAddress: :9996\n", "playback", out,
+                           sizeof(out)) == 0);
+    /* indented (non-top-level) and commented lines do not match */
+    CHECK(conf_scalar_line("  playback: yes\n", "playback", out, sizeof(out)) == 0);
+    CHECK(conf_scalar_line("#playback: yes\n", "playback", out, sizeof(out)) == 0);
+
+    CHECK(truthy("yes") == 1);
+    CHECK(truthy("true") == 1);
+    CHECK(truthy("no") == 0);
+    CHECK(truthy("false") == 0);
+    CHECK(truthy("0") == 0);
+    CHECK(truthy("") == 0);
+
+    return 0;
+}
+
+static int test_clip_filename(void) {
+    char out[128];
+
+    clip_filename("cam1", "2026-07-02T12:00:00Z", out, sizeof(out));
+    CHECK(strcmp(out, "cam1_2026-07-02T12-00-00Z.mp4") == 0);
+
+    /* path separators and other unsafe characters become dashes */
+    clip_filename("front/door", "2026-07-02T12:00:00Z", out, sizeof(out));
+    CHECK(strchr(out, '/') == NULL);
+    CHECK(strncmp(out, "front-door_", 11) == 0);
+
+    return 0;
+}
+
 static int test_resolve_recording(void) {
     FCGX_Request rq;
     memset(&rq, 0, sizeof(rq));
@@ -373,6 +447,9 @@ int main(void) {
     if (test_parse_moov())       return 1;
     if (test_moof_video())       return 1;
     if (test_detect_codecs())    return 1;
+    if (test_raw_params())       return 1;
+    if (test_conf_scalar_line()) return 1;
+    if (test_clip_filename())    return 1;
     if (test_resolve_recording()) return 1;
     printf("all %d checks passed\n", tests_run);
     return 0;

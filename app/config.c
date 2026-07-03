@@ -9,25 +9,40 @@
  *   GET  config.cgi?action=status     -> JSON: MediaMTX running / crash count
  *   GET  config.cgi?action=storage    -> JSON: recordings disk usage
  *   GET  config.cgi?action=recordings -> JSON list of recorded .mp4 segments
+ *   GET  config.cgi?action=streams    -> JSON list of recorded stream names
  *   GET  config.cgi?action=fragidx&file=<rel>   -> fragment index for MSE
  *   GET  config.cgi?action=recording&file=<rel> -> stream a recording (Range)
+ *   GET  config.cgi?action=timeline&path=<name>[&start=..&end=..]
+ *                                     -> recorded timespans (proxies the
+ *                                        MediaMTX playback server's /list)
+ *   GET  config.cgi?action=clip&path=<name>&start=<RFC3339>&duration=<secs>
+ *                   [&format=fmp4|mp4][&download=1]
+ *                                     -> extract footage by time (proxies /get)
  *   POST config.cgi                   -> overwrite mediamtx.yml with request body
  *   POST config.cgi?action=restart    -> restart the MediaMTX process
  *   POST config.cgi?action=delete&file=<rel>    -> delete a recording
+ *
+ * Requests are served by a small pool of threads: clip playback keeps a
+ * connection busy for as long as the viewer watches, and must not block the
+ * status/timeline requests the recordings page issues meanwhile.
  */
 
 #define _FILE_OFFSET_BITS 64
 
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcgiapp.h>
 #include <limits.h>
+#include <netinet/in.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/types.h>
@@ -40,10 +55,13 @@
 #define DEFAULT_FILE APPDIR "/mediamtx.defaults.yml"
 #define PID_FILE     APPDIR "/mediamtx.pid"
 #define FAILS_FILE   APPDIR "/mediamtx.fails"
-#define TMP_FILE     LOCALDATA "/mediamtx.yml.tmp"
+#define TMP_FILE     LOCALDATA "/mediamtx.yml.tmp" /* .<tid> appended per thread */
 #define BAK_FILE     LOCALDATA "/mediamtx.yml.bak"
 
 #define RECORD_BASE_DEFAULT "/var/spool/storage/areas/SD_DISK/MediaMTX/recordings"
+
+#define NUM_WORKERS 4
+#define PLAYBACK_PORT_DEFAULT 9996
 
 static void send_text_file(FCGX_Request* r, const char* path) {
     FILE* f = fopen(path, "rb");
@@ -156,14 +174,18 @@ static void backup_config(void) {
     fclose(out);
 }
 
-/* Stream the POST body to a temp file then atomically replace mediamtx.yml. */
-static int save_config(FCGX_Request* r) {
+/* Stream the POST body to a temp file then atomically replace mediamtx.yml.
+ * The temp file name carries the worker thread id so concurrent saves cannot
+ * interleave into the same file. */
+static int save_config(FCGX_Request* r, int tid) {
     const char* cl = FCGX_GetParam("CONTENT_LENGTH", r->envp);
     long remaining  = cl ? atol(cl) : -1;
 
-    FILE* f = fopen(TMP_FILE, "wb");
+    char tmppath[PATH_MAX];
+    snprintf(tmppath, sizeof(tmppath), TMP_FILE ".%d", tid);
+    FILE* f = fopen(tmppath, "wb");
     if (!f) {
-        syslog(LOG_ERR, "cannot open %s: %s", TMP_FILE, strerror(errno));
+        syslog(LOG_ERR, "cannot open %s: %s", tmppath, strerror(errno));
         return -1;
     }
 
@@ -197,7 +219,7 @@ static int save_config(FCGX_Request* r) {
     fclose(f);
 
     backup_config(); /* only after the new config arrived intact */
-    if (rename(TMP_FILE, CONF_FILE) != 0) {
+    if (rename(tmppath, CONF_FILE) != 0) {
         syslog(LOG_ERR, "rename to %s failed: %s", CONF_FILE, strerror(errno));
         return -1;
     }
@@ -235,6 +257,65 @@ static void get_record_base(char* out, size_t outsz) {
     }
     if (out[0] == '\0')
         snprintf(out, outsz, "%s", RECORD_BASE_DEFAULT);
+}
+
+/* Parse a top-level "key: value" line from mediamtx.yml. Returns 1 and fills
+ * out (comment stripped, whitespace trimmed, surrounding quotes removed) when
+ * the line defines exactly this key at indent level zero. */
+static int conf_scalar_line(const char* line, const char* key, char* out,
+                            size_t outsz) {
+    size_t klen = strlen(key);
+    if (strncmp(line, key, klen) != 0 || line[klen] != ':')
+        return 0;
+    const char* p = line + klen + 1;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    size_t i = 0;
+    while (*p && *p != '#' && *p != '\r' && *p != '\n' && i + 1 < outsz)
+        out[i++] = *p++;
+    while (i > 0 && (out[i - 1] == ' ' || out[i - 1] == '\t'))
+        i--;
+    out[i] = '\0';
+    if (i >= 2 && ((out[0] == '"' && out[i - 1] == '"') ||
+                   (out[0] == '\'' && out[i - 1] == '\''))) {
+        memmove(out, out + 1, i - 2);
+        out[i - 2] = '\0';
+    }
+    return 1;
+}
+
+/* Read a top-level scalar setting from mediamtx.yml; empty when absent. */
+static void conf_scalar(const char* key, char* out, size_t outsz) {
+    out[0]  = '\0';
+    FILE* f = fopen(CONF_FILE, "r");
+    if (!f)
+        return;
+    char line[1024];
+    while (fgets(line, sizeof(line), f))
+        if (conf_scalar_line(line, key, out, outsz))
+            break;
+    fclose(f);
+}
+
+static int truthy(const char* v) {
+    return v[0] && strcasecmp(v, "no") != 0 && strcasecmp(v, "false") != 0 &&
+           strcasecmp(v, "off") != 0 && strcmp(v, "0") != 0;
+}
+
+/* Port of the MediaMTX playback server per mediamtx.yml, or -1 when the
+ * server is disabled (the upstream default). The proxy always connects to
+ * 127.0.0.1 regardless of the configured bind address. */
+static int playback_port(void) {
+    char v[256];
+    conf_scalar("playback", v, sizeof(v));
+    if (!truthy(v))
+        return -1;
+    conf_scalar("playbackAddress", v, sizeof(v));
+    const char* c = strrchr(v, ':');
+    long port     = c ? atol(c + 1) : 0;
+    if (port <= 0 || port > 65535)
+        port = PLAYBACK_PORT_DEFAULT;
+    return (int)port;
 }
 
 /* Report whether MediaMTX is running and how often it has crashed recently.
@@ -854,6 +935,60 @@ static void list_recordings(FCGX_Request* r, const char* base, const char* rel,
     closedir(d);
 }
 
+/* Emit JSON strings for every directory under base that directly contains
+ * .mp4 recordings; with the default recordPath layout those are exactly the
+ * stream path names the recorder writes (%path may itself contain slashes,
+ * hence the recursion). */
+static void streams_walk(FCGX_Request* r, const char* base, const char* rel,
+                         int depth, int* first) {
+    if (depth > 8)
+        return;
+    char dirpath[PATH_MAX];
+    if (rel[0])
+        snprintf(dirpath, sizeof(dirpath), "%s/%s", base, rel);
+    else
+        snprintf(dirpath, sizeof(dirpath), "%s", base);
+
+    DIR* d = opendir(dirpath);
+    if (!d)
+        return;
+    struct dirent* e;
+    int has_mp4 = 0;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.')
+            continue;
+        size_t len = strlen(e->d_name);
+        if (len > 4 && strcasecmp(e->d_name + len - 4, ".mp4") == 0) {
+            has_mp4 = 1;
+            break;
+        }
+    }
+    if (has_mp4 && rel[0]) {
+        FCGX_FPrintF(r->out, "%s\"", *first ? "" : ",");
+        json_puts_escaped(r->out, rel);
+        FCGX_FPrintF(r->out, "\"");
+        *first = 0;
+        closedir(d);
+        return;
+    }
+    rewinddir(d);
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.')
+            continue;
+        char childrel[PATH_MAX];
+        if (rel[0])
+            snprintf(childrel, sizeof(childrel), "%s/%s", rel, e->d_name);
+        else
+            snprintf(childrel, sizeof(childrel), "%s", e->d_name);
+        char full[PATH_MAX];
+        snprintf(full, sizeof(full), "%s/%s", base, childrel);
+        struct stat st;
+        if (stat(full, &st) == 0 && S_ISDIR(st.st_mode))
+            streams_walk(r, base, childrel, depth + 1, first);
+    }
+    closedir(d);
+}
+
 static int hexval(int c) {
     if (c >= '0' && c <= '9')
         return c - '0';
@@ -903,6 +1038,263 @@ static int query_param(const char* query, const char* key, char* out, size_t out
             p++;
     }
     return 0;
+}
+
+/* Extract a query-string parameter without URL-decoding it, for values that
+ * are forwarded verbatim to the playback server. Returns 1 if found. */
+static int query_param_raw(const char* query, const char* key, char* out,
+                           size_t outsz) {
+    size_t klen   = strlen(key);
+    const char* p = query;
+    while (p && *p) {
+        if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
+            const char* v   = p + klen + 1;
+            const char* amp = strchr(v, '&');
+            size_t vlen     = amp ? (size_t)(amp - v) : strlen(v);
+            if (vlen >= outsz)
+                vlen = outsz - 1;
+            memcpy(out, v, vlen);
+            out[vlen] = '\0';
+            return 1;
+        }
+        p = strchr(p, '&');
+        if (p)
+            p++;
+    }
+    return 0;
+}
+
+/* Validate a raw (still percent-encoded) value before embedding it in the
+ * upstream HTTP request line: URL-safe characters only, so the request cannot
+ * be corrupted (no spaces, CR/LF, '&', '?', etc.). */
+static int is_safe_rawparam(const char* s) {
+    if (!*s)
+        return 0;
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') || strchr("-._~%+:/", c))
+            continue;
+        return 0;
+    }
+    return 1;
+}
+
+static int write_all(int fd, const char* buf, size_t len) {
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n <= 0)
+            return -1;
+        buf += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+static int playback_connect(int port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+    /* Never let a wedged playback server hang a worker thread; streaming
+     * reads normally return long before this. */
+    struct timeval tv = {30, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family      = AF_INET;
+    sa.sin_port        = htons((uint16_t)port);
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/*
+ * Proxy one request to the MediaMTX playback server on localhost and stream
+ * the response back. This keeps the playback server unexposed (it is bound to
+ * 127.0.0.1), reuses the device's admin authentication, and avoids the CORS
+ * and mixed-content problems of pointing the browser at another port.
+ *
+ * The request is sent as HTTP/1.0 so the response is never chunk-encoded (the
+ * device web server applies its own framing); the body simply ends at EOF.
+ */
+static void proxy_playback(FCGX_Request* r, const char* upath,
+                           const char* query, const char* dlname) {
+    int port = playback_port();
+    if (port < 0) {
+        send_json(r, "200 OK",
+                  "{\"ok\":false,\"error\":\"playback server disabled\"}");
+        return;
+    }
+    int fd = playback_connect(port);
+    if (fd < 0) {
+        send_json(r, "200 OK",
+                  "{\"ok\":false,\"error\":\"playback server unreachable\"}");
+        return;
+    }
+
+    char req[2048];
+    int m = snprintf(req, sizeof(req),
+                     "GET %s?%s HTTP/1.0\r\n"
+                     "Host: 127.0.0.1\r\n"
+                     "Connection: close\r\n\r\n",
+                     upath, query);
+    if (m < 0 || m >= (int)sizeof(req) || write_all(fd, req, (size_t)m) != 0) {
+        close(fd);
+        send_json(r, "502 Bad Gateway",
+                  "{\"ok\":false,\"error\":\"playback request failed\"}");
+        return;
+    }
+
+    /* Read the response headers (and possibly the start of the body). */
+    char   hdr[8192];
+    size_t hlen = 0;
+    char*  body = NULL;
+    while (hlen < sizeof(hdr) - 1) {
+        ssize_t n = read(fd, hdr + hlen, sizeof(hdr) - 1 - hlen);
+        if (n <= 0)
+            break;
+        hlen += (size_t)n;
+        hdr[hlen] = '\0';
+        if ((body = strstr(hdr, "\r\n\r\n"))) {
+            body += 4;
+            break;
+        }
+    }
+    if (!body) {
+        close(fd);
+        send_json(r, "502 Bad Gateway",
+                  "{\"ok\":false,\"error\":\"bad playback response\"}");
+        return;
+    }
+    size_t leftover = hlen - (size_t)(body - hdr);
+    body[-4]        = '\0'; /* confine header parsing to the header block */
+
+    /* Status line: "HTTP/1.x 200 OK" -> forward "200 OK". */
+    char status[64]  = "200 OK";
+    const char* sp   = strchr(hdr, ' ');
+    if (sp) {
+        sp++;
+        const char* eol = strstr(sp, "\r\n");
+        size_t sl       = eol ? (size_t)(eol - sp) : strlen(sp);
+        if (sl >= sizeof(status))
+            sl = sizeof(status) - 1;
+        memcpy(status, sp, sl);
+        status[sl] = '\0';
+    }
+
+    char ctype[128] = "application/octet-stream";
+    for (const char* h = strstr(hdr, "\r\n"); h; h = strstr(h, "\r\n")) {
+        h += 2;
+        if (strncasecmp(h, "Content-Type:", 13) == 0) {
+            const char* v = h + 13;
+            while (*v == ' ')
+                v++;
+            const char* eol = strstr(v, "\r\n");
+            size_t vl       = eol ? (size_t)(eol - v) : strlen(v);
+            if (vl >= sizeof(ctype))
+                vl = sizeof(ctype) - 1;
+            memcpy(ctype, v, vl);
+            ctype[vl] = '\0';
+            break;
+        }
+    }
+
+    FCGX_FPrintF(r->out,
+                 "Status: %s\r\n"
+                 "Content-Type: %s\r\n"
+                 "Cache-Control: no-store\r\n",
+                 status, ctype);
+    if (dlname)
+        FCGX_FPrintF(r->out, "Content-Disposition: attachment; filename=\"%s\"\r\n",
+                     dlname);
+    FCGX_FPrintF(r->out, "\r\n");
+
+    if (leftover > 0 && FCGX_PutStr(body, (int)leftover, r->out) < 0) {
+        close(fd);
+        return; /* client went away */
+    }
+    char    buf[65536];
+    ssize_t n;
+    while ((n = read(fd, buf, sizeof(buf))) > 0)
+        if (FCGX_PutStr(buf, (int)n, r->out) < 0)
+            break;
+    close(fd);
+}
+
+/* Build a safe download filename from the (decoded) stream path and start
+ * time, e.g. "cam1_2026-07-02T14-30-00Z.mp4". */
+static void clip_filename(const char* path, const char* start, char* out,
+                          size_t outsz) {
+    size_t o = 0;
+    const char* parts[2] = {path, start};
+    for (int i = 0; i < 2; i++) {
+        if (i && o + 1 < outsz - 5)
+            out[o++] = '_';
+        for (const char* p = parts[i]; *p && o + 1 < outsz - 5; p++) {
+            unsigned char c = (unsigned char)*p;
+            int ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                     (c >= 'A' && c <= 'Z') || c == '-' || c == '.';
+            out[o++] = ok ? (char)c : '-';
+        }
+    }
+    snprintf(out + o, outsz - o, ".mp4");
+}
+
+/* GET action=timeline&path=<name>[&start=..&end=..]: recorded timespans. */
+static void handle_timeline(FCGX_Request* r, const char* query) {
+    char path[512], start[128], end[128], q[1024];
+    if (!query_param_raw(query, "path", path, sizeof(path)) ||
+        !is_safe_rawparam(path)) {
+        send_json(r, "400 Bad Request", "{\"ok\":false,\"error\":\"bad path\"}");
+        return;
+    }
+    if (!query_param_raw(query, "start", start, sizeof(start)) ||
+        !is_safe_rawparam(start))
+        start[0] = '\0';
+    if (!query_param_raw(query, "end", end, sizeof(end)) ||
+        !is_safe_rawparam(end))
+        end[0] = '\0';
+    snprintf(q, sizeof(q), "path=%s%s%s%s%s", path,
+             start[0] ? "&start=" : "", start,
+             end[0] ? "&end=" : "", end);
+    proxy_playback(r, "/list", q, NULL);
+}
+
+/* GET action=clip&path=..&start=..&duration=..[&format=..][&download=1]:
+ * footage for an arbitrary time window, stitched across segment files by the
+ * playback server. */
+static void handle_clip(FCGX_Request* r, const char* query) {
+    char path[512], start[128], dur[64], fmt[16], q[1024];
+    if (!query_param_raw(query, "path", path, sizeof(path)) ||
+        !is_safe_rawparam(path) ||
+        !query_param_raw(query, "start", start, sizeof(start)) ||
+        !is_safe_rawparam(start) ||
+        !query_param_raw(query, "duration", dur, sizeof(dur)) ||
+        !is_safe_rawparam(dur)) {
+        send_json(r, "400 Bad Request",
+                  "{\"ok\":false,\"error\":\"need path, start, duration\"}");
+        return;
+    }
+    if (!query_param_raw(query, "format", fmt, sizeof(fmt)) ||
+        (strcmp(fmt, "mp4") != 0 && strcmp(fmt, "fmp4") != 0))
+        snprintf(fmt, sizeof(fmt), "fmp4");
+    snprintf(q, sizeof(q), "path=%s&start=%s&duration=%s&format=%s", path,
+             start, dur, fmt);
+
+    char  flag[8], dlname[512];
+    char* dl = NULL;
+    if (query_param_raw(query, "download", flag, sizeof(flag))) {
+        char dpath[512], dstart[128];
+        url_decode(path, dpath, sizeof(dpath));
+        url_decode(start, dstart, sizeof(dstart));
+        clip_filename(dpath, dstart, dlname, sizeof(dlname));
+        dl = dlname;
+    }
+    proxy_playback(r, "/get", q, dl);
 }
 
 /* Stream a single recording file, honouring an optional HTTP Range request so
@@ -1018,6 +1410,118 @@ static void delete_recording(FCGX_Request* r, const char* base, const char* file
     send_json(r, "200 OK", "{\"ok\":true,\"action\":\"delete\"}");
 }
 
+static void handle_request(FCGX_Request* r, int tid) {
+    const char* method = FCGX_GetParam("REQUEST_METHOD", r->envp);
+    const char* query  = FCGX_GetParam("QUERY_STRING", r->envp);
+    if (!method)
+        method = "";
+    if (!query)
+        query = "";
+
+    if (strcmp(method, "GET") == 0) {
+        if (strstr(query, "action=defaults")) {
+            send_text_file(r, DEFAULT_FILE);
+        } else if (strstr(query, "action=backup")) {
+            send_text_file(r, BAK_FILE);
+        } else if (strstr(query, "action=status")) {
+            send_status(r);
+        } else if (strstr(query, "action=storage")) {
+            char base[PATH_MAX];
+            get_record_base(base, sizeof(base));
+            send_storage(r, base);
+        } else if (strstr(query, "action=recordings")) {
+            char base[PATH_MAX];
+            get_record_base(base, sizeof(base));
+            FCGX_FPrintF(r->out,
+                         "Content-Type: application/json\r\n"
+                         "Cache-Control: no-store\r\n\r\n[");
+            int first = 1;
+            list_recordings(r, base, "", 0, &first);
+            FCGX_FPrintF(r->out, "]");
+        } else if (strstr(query, "action=streams")) {
+            char base[PATH_MAX];
+            get_record_base(base, sizeof(base));
+            FCGX_FPrintF(r->out,
+                         "Content-Type: application/json\r\n"
+                         "Cache-Control: no-store\r\n\r\n[");
+            int first = 1;
+            streams_walk(r, base, "", 0, &first);
+            FCGX_FPrintF(r->out, "]");
+        } else if (strstr(query, "action=timeline")) {
+            handle_timeline(r, query);
+        } else if (strstr(query, "action=clip")) {
+            handle_clip(r, query);
+        } else if (strstr(query, "action=fragidx")) {
+            char base[PATH_MAX], file[PATH_MAX];
+            get_record_base(base, sizeof(base));
+            if (query_param(query, "file", file, sizeof(file)))
+                send_fragidx(r, base, file);
+            else
+                send_json(r, "400 Bad Request",
+                          "{\"ok\":false,\"error\":\"missing file\"}");
+        } else if (strstr(query, "action=recording")) {
+            char base[PATH_MAX], file[PATH_MAX];
+            get_record_base(base, sizeof(base));
+            if (query_param(query, "file", file, sizeof(file)))
+                send_recording(r, base, file);
+            else
+                send_json(r, "400 Bad Request",
+                          "{\"ok\":false,\"error\":\"missing file\"}");
+        } else {
+            send_text_file(r, CONF_FILE);
+        }
+    } else if (strcmp(method, "POST") == 0) {
+        if (!same_origin(r)) {
+            send_json(r, "403 Forbidden",
+                      "{\"ok\":false,\"error\":\"cross-origin request rejected\"}");
+        } else if (strstr(query, "action=restart")) {
+            if (restart_mediamtx() == 0)
+                send_json(r, "200 OK", "{\"ok\":true,\"action\":\"restart\"}");
+            else
+                send_json(r,
+                          "500 Internal Server Error",
+                          "{\"ok\":false,\"error\":\"restart failed\"}");
+        } else if (strstr(query, "action=delete")) {
+            char base[PATH_MAX], file[PATH_MAX];
+            get_record_base(base, sizeof(base));
+            if (query_param(query, "file", file, sizeof(file)))
+                delete_recording(r, base, file);
+            else
+                send_json(r, "400 Bad Request",
+                          "{\"ok\":false,\"error\":\"missing file\"}");
+        } else {
+            if (save_config(r, tid) == 0)
+                send_json(r, "200 OK", "{\"ok\":true,\"action\":\"save\"}");
+            else
+                send_json(r,
+                          "500 Internal Server Error",
+                          "{\"ok\":false,\"error\":\"save failed\"}");
+        }
+    } else {
+        send_json(r,
+                  "405 Method Not Allowed",
+                  "{\"ok\":false,\"error\":\"method not allowed\"}");
+    }
+}
+
+static int g_sock = -1;
+
+/* One accept loop per worker thread; FCGX_Accept_r is thread-safe over a
+ * shared listening socket. */
+static void* request_loop(void* arg) {
+    int          tid = (int)(intptr_t)arg;
+    FCGX_Request request;
+    if (FCGX_InitRequest(&request, g_sock, 0) != 0) {
+        syslog(LOG_ERR, "FCGX_InitRequest failed (worker %d)", tid);
+        return NULL;
+    }
+    while (FCGX_Accept_r(&request) == 0) {
+        handle_request(&request, tid);
+        FCGX_Finish_r(&request);
+    }
+    return NULL;
+}
+
 int main(void) {
     openlog("mediamtx_config", LOG_PID, LOG_USER);
 
@@ -1038,8 +1542,8 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    int sock = FCGX_OpenSocket(socket_path, 5);
-    if (sock < 0) {
+    g_sock = FCGX_OpenSocket(socket_path, 16);
+    if (g_sock < 0) {
         syslog(LOG_ERR, "FCGX_OpenSocket failed");
         return EXIT_FAILURE;
     }
@@ -1048,94 +1552,15 @@ int main(void) {
     chmod(socket_path,
           S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
 
-    FCGX_Request request;
-    if (FCGX_InitRequest(&request, sock, 0) != 0) {
-        syslog(LOG_ERR, "FCGX_InitRequest failed");
-        return EXIT_FAILURE;
-    }
-
-    while (FCGX_Accept_r(&request) == 0) {
-        const char* method = FCGX_GetParam("REQUEST_METHOD", request.envp);
-        const char* query  = FCGX_GetParam("QUERY_STRING", request.envp);
-        if (!method)
-            method = "";
-        if (!query)
-            query = "";
-
-        if (strcmp(method, "GET") == 0) {
-            if (strstr(query, "action=defaults")) {
-                send_text_file(&request, DEFAULT_FILE);
-            } else if (strstr(query, "action=backup")) {
-                send_text_file(&request, BAK_FILE);
-            } else if (strstr(query, "action=status")) {
-                send_status(&request);
-            } else if (strstr(query, "action=storage")) {
-                char base[PATH_MAX];
-                get_record_base(base, sizeof(base));
-                send_storage(&request, base);
-            } else if (strstr(query, "action=recordings")) {
-                char base[PATH_MAX];
-                get_record_base(base, sizeof(base));
-                FCGX_FPrintF(request.out,
-                             "Content-Type: application/json\r\n"
-                             "Cache-Control: no-store\r\n\r\n[");
-                int first = 1;
-                list_recordings(&request, base, "", 0, &first);
-                FCGX_FPrintF(request.out, "]");
-            } else if (strstr(query, "action=fragidx")) {
-                char base[PATH_MAX], file[PATH_MAX];
-                get_record_base(base, sizeof(base));
-                if (query_param(query, "file", file, sizeof(file)))
-                    send_fragidx(&request, base, file);
-                else
-                    send_json(&request, "400 Bad Request",
-                              "{\"ok\":false,\"error\":\"missing file\"}");
-            } else if (strstr(query, "action=recording")) {
-                char base[PATH_MAX], file[PATH_MAX];
-                get_record_base(base, sizeof(base));
-                if (query_param(query, "file", file, sizeof(file)))
-                    send_recording(&request, base, file);
-                else
-                    send_json(&request, "400 Bad Request",
-                              "{\"ok\":false,\"error\":\"missing file\"}");
-            } else {
-                send_text_file(&request, CONF_FILE);
-            }
-        } else if (strcmp(method, "POST") == 0) {
-            if (!same_origin(&request)) {
-                send_json(&request, "403 Forbidden",
-                          "{\"ok\":false,\"error\":\"cross-origin request rejected\"}");
-            } else if (strstr(query, "action=restart")) {
-                if (restart_mediamtx() == 0)
-                    send_json(&request, "200 OK", "{\"ok\":true,\"action\":\"restart\"}");
-                else
-                    send_json(&request,
-                              "500 Internal Server Error",
-                              "{\"ok\":false,\"error\":\"restart failed\"}");
-            } else if (strstr(query, "action=delete")) {
-                char base[PATH_MAX], file[PATH_MAX];
-                get_record_base(base, sizeof(base));
-                if (query_param(query, "file", file, sizeof(file)))
-                    delete_recording(&request, base, file);
-                else
-                    send_json(&request, "400 Bad Request",
-                              "{\"ok\":false,\"error\":\"missing file\"}");
-            } else {
-                if (save_config(&request) == 0)
-                    send_json(&request, "200 OK", "{\"ok\":true,\"action\":\"save\"}");
-                else
-                    send_json(&request,
-                              "500 Internal Server Error",
-                              "{\"ok\":false,\"error\":\"save failed\"}");
-            }
-        } else {
-            send_json(&request,
-                      "405 Method Not Allowed",
-                      "{\"ok\":false,\"error\":\"method not allowed\"}");
+    for (long tid = 1; tid < NUM_WORKERS; tid++) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, request_loop, (void*)(intptr_t)tid) != 0) {
+            syslog(LOG_ERR, "pthread_create failed: %s", strerror(errno));
+            return EXIT_FAILURE;
         }
-
-        FCGX_Finish_r(&request);
+        pthread_detach(t);
     }
+    request_loop((void*)(intptr_t)0);
 
     return EXIT_SUCCESS;
 }

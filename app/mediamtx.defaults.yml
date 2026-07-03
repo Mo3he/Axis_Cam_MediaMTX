@@ -219,9 +219,12 @@ pprofTrustedProxies: []
 # Global settings -> Playback server
 
 # Enable the playback server, which allows to download recordings from the server.
-playback: false
+# The Recordings page timeline uses it (via config.cgi on the camera itself) for
+# time-based playback and clip export; bound to localhost so it is not exposed
+# to the network directly.
+playback: yes
 # Address of the TCP/HTTP listener.
-playbackAddress: :9996
+playbackAddress: 127.0.0.1:9996
 # Enable HTTPS.
 playbackEncryption: false
 # Path to the server key. This is needed only when encryption is yes.

@@ -31,9 +31,14 @@ streams from one end to the other.
 - **Live view page** — lists the stream paths in your configuration with one-click
   links to MediaMTX's built-in HLS and WebRTC players and copyable RTSP URLs, at
   `https://<device ip>/local/MediaMTX/live.html`.
-- **Recordings browser** — list recorded segments with a date/time filter, play or
-  download them in the browser, delete individual segments, and see the storage
-  card's disk usage, served at `https://<device ip>/local/MediaMTX/recordings.html`.
+- **VMS-style playback timeline** — the Recordings page shows a per-stream, per-day
+  timeline of recorded footage. Click any moment to play from that exact time
+  (stitched across segment files), drag to select a range, and export the selection
+  as a standard MP4 — footage is addressed by time, not by file.
+- **Recordings browser** — below the timeline, list recorded segments with a
+  date/time filter, play or download them in the browser, delete individual
+  segments, and see the storage card's disk usage, served at
+  `https://<device ip>/local/MediaMTX/recordings.html`.
 - **Upgrade-safe configuration** — your `mediamtx.yml` is stored in the app's persistent
   `localdata` directory, so it is preserved when you update the ACAP to a newer version.
 - **Config backup and crash-loop protection** — every save keeps a backup of the
@@ -126,12 +131,35 @@ makes the stream available at `rtsp://IPAddress:8554/proxied` with no authentica
 
 When recording is enabled for a path, segments are written to the storage location set by
 `recordPath` (the SD card by default; some recorder devices use an internal disk such as
-`HDD_DISK`). The **Recordings** page lists the recorded `.mp4` segments and lets you
-filter by stream and date/time, then play them inline, download them, or delete them.
-It also shows how full the recording storage is. Open it from the **Recordings** link
-in the settings page header, or browse to
-`https://<device ip>/local/MediaMTX/recordings.html`. Like the config editor, it is
-admin-access only.
+`HDD_DISK`). Open the **Recordings** page from the link in the settings page header,
+or browse to `https://<device ip>/local/MediaMTX/recordings.html`. Like the config
+editor, it is admin-access only.
+
+### Playback timeline
+
+The top of the page is a VMS-style timeline: pick a stream and a day, and the
+recorded periods are drawn on a 24-hour bar (gaps stay empty). Click anywhere in a
+recorded period to start playback from that moment — MediaMTX's playback server
+extracts the footage by time and stitches it across segment files, so playback runs
+seamlessly past file boundaries and jumps over gaps automatically. Drag on the bar to
+select a range, then play it or download it as a standard MP4 clip.
+
+The timeline is powered by the MediaMTX playback server, which the default
+configuration enables on `127.0.0.1:9996` (localhost only — it is never exposed to
+the network; the web UI reaches it through the authenticated `config.cgi` proxy). If
+you upgraded with an existing configuration, add these two lines and Save & Restart
+to activate the timeline:
+
+```yaml
+playback: yes
+playbackAddress: 127.0.0.1:9996
+```
+
+### Segment files
+
+Below the timeline, the recorded `.mp4` segments are listed with a stream and
+date/time filter; each can be played inline, downloaded, or deleted. The page also
+shows how full the recording storage is.
 
 Your configuration is stored in the app's persistent `localdata` directory and is kept
 across application upgrades. Uninstalling the ACAP removes all files, including the
