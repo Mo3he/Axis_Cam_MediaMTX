@@ -1,31 +1,36 @@
 {
-  "schemaVersion": "1.7.0",
+  "schemaVersion": "2.0.0",
   "resources": {
-      "linux": {
-          "user": {
-              "groups": ["storage"]
-          }
+    "linux": {
+      "user": {
+        "groups": ["storage"]
       }
+    }
   },
   "acapPackageConf": {
-      "setup": {
-          "appName": "MediaMTX",
-          "friendlyName": "MediaMTX",
-          "vendor": "Mo3he",
-          "embeddedSdkVersion": "3.0",
-          "vendorUrl": "https://github.com/Mo3he/Axis_Cam_MediaMTX",
-          "runMode": "respawn",
-          "version": "1.19.2"
-        },
-        "configuration":  {
-          "settingPage": "index.html",
-          "httpConfig": [
-            {
-              "type": "fastCgi",
-              "name": "config.cgi",
-              "access": "admin"
-            }
-          ]
+    "setup": {
+      "appName": "MediaMTX",
+      "friendlyName": "MediaMTX",
+      "vendor": "Mo3he",
+      "vendorUrl": "https://github.com/Mo3he/Axis_Cam_MediaMTX",
+      "vendorId": "5741c1fb91",
+      "compatibleOsVersions": [
+        {
+          "max": "13"
         }
-      }
+      ],
+      "runMode": "respawn",
+      "version": "1.19.2"
+    },
+    "configuration": {
+      "settingPage": "index.html",
+      "httpConfig": [
+        {
+          "type": "fastCgi",
+          "name": "config.cgi",
+          "access": "admin"
+        }
+      ]
+    }
   }
+}

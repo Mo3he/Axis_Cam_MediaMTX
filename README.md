@@ -61,7 +61,10 @@ streams from one end to the other.
 ## Compatibility
 
 Compatible with Axis cameras with `arm` (armv7hf) and `aarch64` based SoCs. The packages
-are built with the ACAP Native SDK 12.9.0 and require a compatible AXIS OS version.
+are built with the ACAP Native SDK 12.10.0 (Ubuntu 24.04 base), use ACAP manifest schema
+2.0.0, and declare compatibility through AXIS OS 13.
+
+The manifest includes the Axis ACAP Portal vendorId and is ready for portal signing.
 
 To check your device architecture:
 

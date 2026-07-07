@@ -5,7 +5,7 @@
 #   docker build --build-arg ARCH=aarch64 --tag mediamtx-aarch64 .
 #   docker build --build-arg ARCH=armv7hf --tag mediamtx-armv7hf .
 ARG ARCH=aarch64
-ARG VERSION=12.9.0
+ARG VERSION=12.10.0
 ARG UBUNTU_VERSION=24.04
 ARG REPO=axisecp
 ARG SDK=acap-native-sdk

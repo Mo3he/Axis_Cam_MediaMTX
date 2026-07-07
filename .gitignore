@@ -12,3 +12,4 @@ app/lib/mediamtx
 
 # Host-side test binary
 tests/test_mp4
+tests/test_mp4.dSYM/
