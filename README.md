@@ -173,8 +173,21 @@ The MediaMTX binary is **not** stored in this repository. It is downloaded from 
 official [bluenviron/mediamtx](https://github.com/bluenviron/mediamtx/releases) release
 and verified against its published `checksums.sha256` during the Docker build.
 
-Both architectures build from the single `Dockerfile` in the repository root; select
-one with the `ARCH` build argument (`aarch64` or `armv7hf`):
+The quickest way is the convenience script, which auto-detects docker/podman, builds
+both architectures, and drops the `.eap` files in the repository root:
+
+```sh
+./build.sh
+```
+
+To bundle a specific MediaMTX version, set `MEDIAMTX_VERSION` (without the leading `v`):
+
+```sh
+MEDIAMTX_VERSION=1.19.2 ./build.sh
+```
+
+Or drive the build manually. Both architectures build from the single `Dockerfile` in
+the repository root; select one with the `ARCH` build argument (`aarch64` or `armv7hf`):
 
 ```sh
 docker build --build-arg ARCH=aarch64 --tag <package name> .
