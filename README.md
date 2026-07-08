@@ -6,13 +6,12 @@ web interface for editing its configuration.
 
 Current version: **1.19.2** (MediaMTX v1.19.2)
 
-### Disclaimer
+## Disclaimer
 
 This is an independent, community-developed ACAP package and is not an official Axis
 Communications product. It is not affiliated
 with, endorsed by, or supported by Axis Communications AB. Use it at your own risk. For
 official Axis software, visit axis.com
-
 
 ## Purpose
 
@@ -54,9 +53,9 @@ streams from one end to the other.
 
 ## Links
 
-- MediaMTX: https://github.com/bluenviron/mediamtx
-- MediaMTX configuration reference: https://github.com/bluenviron/mediamtx?tab=readme-ov-file#configuration
-- Axis: https://www.axis.com/
+- MediaMTX: <https://github.com/bluenviron/mediamtx>
+- MediaMTX configuration reference: <https://github.com/bluenviron/mediamtx?tab=readme-ov-file#configuration>
+- Axis: <https://www.axis.com/>
 
 ## Compatibility
 
@@ -68,7 +67,7 @@ The manifest includes the Axis ACAP Portal vendorId and is ready for portal sign
 
 To check your device architecture:
 
-```
+```sh
 curl --anyauth "*" -u <username>:<password> <device ip>/axis-cgi/basicdeviceinfo.cgi --data "{\"apiVersion\":\"1.0\",\"context\":\"Client defined request ID\",\"method\":\"getAllProperties\"}"
 ```
 
@@ -177,20 +176,20 @@ and verified against its published `checksums.sha256` during the Docker build.
 Both architectures build from the single `Dockerfile` in the repository root; select
 one with the `ARCH` build argument (`aarch64` or `armv7hf`):
 
-```
+```sh
 docker build --build-arg ARCH=aarch64 --tag <package name> .
 ```
 
 To build a specific MediaMTX version, pass the version build argument as well (without
 the leading `v`):
 
-```
+```sh
 docker build --build-arg ARCH=aarch64 --build-arg MEDIAMTX_VERSION=1.19.2 --tag <package name> .
 ```
 
 Then copy the resulting `.eap` out of the image, e.g.:
 
-```
+```sh
 docker cp $(docker create <package name>):/opt/app ./build
 ```
 
@@ -202,7 +201,7 @@ Host-side unit tests cover the MP4 box parsing used by the recordings player and
 request helpers in `config.c`. They build against a stub FastCGI header, so no
 dependencies are needed:
 
-```
+```sh
 cc -Wall -Wextra -Werror -fsanitize=address,undefined -Itests/fcgi_stub tests/test_mp4.c -o tests/test_mp4
 ./tests/test_mp4
 ```
@@ -219,8 +218,3 @@ both architectures, and publishes a matching release with the `.eap` files attac
 can also be run manually from the Actions tab, optionally targeting a specific version
 or, with the **force** option, rebuilding and republishing the current version after a
 packaging change.
-
-
-
-
-
