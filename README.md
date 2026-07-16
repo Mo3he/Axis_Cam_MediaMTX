@@ -6,6 +6,9 @@ web interface for editing its configuration.
 
 Current version: **1.19.2** (MediaMTX v1.19.2)
 
+[![Sponsor](https://img.shields.io/badge/Sponsor%20My%20Work-grey?logo=github)](https://github.com/sponsors/Mo3he)  
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-grey?style=flat&logo=buy-me-a-coffee)](https://www.buymeacoffee.com/mo3he)
+
 ## Disclaimer
 
 This is an independent, community-developed ACAP package and is not an official Axis
