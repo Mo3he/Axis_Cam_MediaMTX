@@ -11,9 +11,9 @@
     "setup": {
       "appName": "MediaMTX",
       "friendlyName": "MediaMTX",
-      "vendor": "Mo3he",
+      "vendor": "moshe@mohome.net",
       "vendorUrl": "https://github.com/Mo3he/Axis_Cam_MediaMTX",
-      "vendorId": "5741c1fb91",
+      "vendorId": "70ee172dd9",
       "compatibleOsVersions": [
         {
           "max": "13"
