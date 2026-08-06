@@ -20,7 +20,7 @@
         }
       ],
       "runMode": "respawn",
-      "version": "1.19.3"
+      "version": "1.20.0"
     },
     "configuration": {
       "settingPage": "index.html",
