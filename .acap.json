@@ -1,0 +1,30 @@
+{
+  "app": "MediaMTX",
+  "friendlyName": "MediaMTX",
+  "versionPolicy": "mirror",
+  "upstream": {
+    "type": "github-release",
+    "repo": "bluenviron/mediamtx",
+    "stripV": true,
+    "name": "MediaMTX",
+    "changesUrl": "https://github.com/bluenviron/mediamtx/releases/tag/v${UPSTREAM}"
+  },
+  "build": {
+    "command": "./build.sh",
+    "env": {
+      "MEDIAMTX_VERSION": "${VERSION}"
+    }
+  },
+  "pins": [
+    {
+      "file": "Dockerfile",
+      "arg": "MEDIAMTX_VERSION"
+    }
+  ],
+  "signing": {
+    "skip": [
+      "*_acap3.eap",
+      "*_root.eap"
+    ]
+  }
+}
