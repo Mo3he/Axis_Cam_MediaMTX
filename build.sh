@@ -27,6 +27,7 @@ MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-}"
 # Remove any previously built .eap files so only the current build remains.
 echo '==> Cleaning old .eap files...'
 rm -f "${REPO_ROOT}"/*.eap
+rm -rf "${REPO_ROOT}/debug"
 
 # build_arch <arch>
 # Builds the image for one architecture, then copies the generated .eap
@@ -47,6 +48,10 @@ build_arch() {
 	CID=$("$RUNTIME" create "$TAG")
 	TMP=$(mktemp -d)
 	"$RUNTIME" cp "${CID}":/opt/app/. "$TMP/"
+	# Unstripped binary for symbolising crash dumps; never shipped.
+	mkdir -p "$REPO_ROOT/debug"
+	"$RUNTIME" cp "${CID}":/opt/debug/mediamtx.unstripped \
+		"$REPO_ROOT/debug/mediamtx-${ARCH}.unstripped"
 	# Move only the freshly built .eap package(s) to the repo root.
 	for eap in "$TMP"/*.eap; do
 		[ -e "$eap" ] || continue
