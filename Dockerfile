@@ -9,7 +9,9 @@ ARG VERSION=12.10.0
 ARG UBUNTU_VERSION=24.04
 ARG REPO=axisecp
 ARG SDK=acap-native-sdk
-ARG MEDIAMTX_VERSION=1.19.2
+# Keep in step with app/manifest.json: CI rewrites this via apply-version.sh, but
+# a local build uses this value, and an older mediamtx rejects newer config keys.
+ARG MEDIAMTX_VERSION=1.20.1
 # Upstream MediaMTX release architecture; derived from ARCH when left empty.
 ARG MEDIAMTX_ARCH=
 
@@ -46,4 +48,10 @@ FROM ${REPO}/${SDK}:${VERSION}-${ARCH}-ubuntu${UBUNTU_VERSION}
 COPY ./app /opt/app/
 COPY --from=fetch /dl/mediamtx /opt/app/lib/mediamtx
 WORKDIR /opt/app
-RUN find . -name .DS_Store -delete && chmod +x /opt/app/lib/mediamtx && . /opt/axis/acapsdk/environment-setup* && acap-build ./ -a mediamtx.defaults.yml -a config.cgi
+# Kept outside /opt/app so it never lands in the .eap. strip does not move code,
+# so this resolves addresses from a stripped-binary crash via addr2line.
+RUN mkdir -p /opt/debug && cp /opt/app/lib/mediamtx /opt/debug/mediamtx.unstripped
+# Upstream ships mediamtx unstripped; stripping saves ~15 MB (25% of the binary).
+RUN find . -name .DS_Store -delete && chmod +x /opt/app/lib/mediamtx && . /opt/axis/acapsdk/environment-setup* && \
+    "${STRIP:?SDK environment did not set STRIP}" /opt/app/lib/mediamtx && \
+    acap-build ./ -a mediamtx.defaults.yml -a config.cgi
