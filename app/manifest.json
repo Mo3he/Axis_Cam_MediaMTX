@@ -3,7 +3,9 @@
   "resources": {
     "linux": {
       "user": {
-        "groups": ["storage"]
+        "groups": [
+          "storage"
+        ]
       }
     }
   },
