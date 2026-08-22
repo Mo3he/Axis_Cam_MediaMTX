@@ -5,6 +5,12 @@ links to its full release notes on GitHub.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.20.1 - 2026-08-22
+
+- Update to upstream 1.20.1.
+- Strip the bundled `mediamtx` binary, which upstream ships unstripped. The
+  package is 16.7 MB instead of 29.0 MB.
+
 ## [1.19.2-Signed] - 2026-07-21 - MediaMTX 1.19.2 (Signed)
 
 - Packages are now signed with the Axis ACAP signing service and install
