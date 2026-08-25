@@ -8,7 +8,7 @@
  *   GET  config.cgi?action=backup     -> return previous mediamtx.yml (pre-save)
  *   GET  config.cgi?action=status     -> JSON: MediaMTX running / crash count
  *   GET  config.cgi?action=storage    -> JSON: recordings disk usage
- *   GET  config.cgi?action=recordings -> JSON list of recorded .mp4 segments
+ *   GET  config.cgi?action=recordings -> JSON list of recorded segments
  *   GET  config.cgi?action=streams    -> JSON list of recorded stream names
  *   GET  config.cgi?action=fragidx&file=<rel>   -> fragment index for MSE
  *   GET  config.cgi?action=recording&file=<rel> -> stream a recording (Range)
@@ -57,8 +57,6 @@
 #define FAILS_FILE   APPDIR "/mediamtx.fails"
 #define TMP_FILE     LOCALDATA "/mediamtx.yml.tmp" /* .<tid> appended per thread */
 #define BAK_FILE     LOCALDATA "/mediamtx.yml.bak"
-
-#define RECORD_BASE_DEFAULT "/var/spool/storage/areas/SD_DISK/MediaMTX/recordings"
 
 #define NUM_WORKERS 4
 #define PLAYBACK_PORT_DEFAULT 9996
@@ -228,7 +226,9 @@ static int save_config(FCGX_Request* r, int tid) {
 
 /* Determine the base directory where recordings are stored by reading the
  * recordPath setting from mediamtx.yml and truncating at the first placeholder
- * (%path / strftime). Falls back to the compiled-in default. */
+ * (%path / strftime). Leaves out empty when recordPath is not set: there is no
+ * safe default, because the correct storage area is named after the disk and
+ * differs between cameras and recorders. */
 static void get_record_base(char* out, size_t outsz) {
     out[0] = '\0';
     FILE* f = fopen(CONF_FILE, "r");
@@ -255,8 +255,6 @@ static void get_record_base(char* out, size_t outsz) {
         }
         fclose(f);
     }
-    if (out[0] == '\0')
-        snprintf(out, outsz, "%s", RECORD_BASE_DEFAULT);
 }
 
 /* Parse a top-level "key: value" line from mediamtx.yml. Returns 1 and fills
@@ -350,6 +348,12 @@ static void send_status(FCGX_Request* r) {
 
 /* Disk usage of the filesystem holding the recordings directory. */
 static void send_storage(FCGX_Request* r, const char* base) {
+    if (!base[0]) {
+        send_json(r, "200 OK",
+                  "{\"ok\":false,\"error\":\"recordPath is not set in "
+                  "mediamtx.yml\"}");
+        return;
+    }
     struct statvfs vfs;
     if (statvfs(base, &vfs) != 0) {
         send_json(r, "200 OK", "{\"ok\":false,\"error\":\"storage unavailable\"}");
@@ -890,7 +894,15 @@ static void send_fragidx(FCGX_Request* r, const char* base, const char* file) {
     free(ko);
 }
 
-/* Recursively emit JSON objects for every .mp4 file under base/rel. */
+/* Recording segments as MediaMTX names them: recordFormat fmp4 writes .mp4,
+ * mpegts writes .ts. */
+static int is_recording_name(const char* name) {
+    size_t len = strlen(name);
+    return (len > 4 && strcasecmp(name + len - 4, ".mp4") == 0) ||
+           (len > 3 && strcasecmp(name + len - 3, ".ts") == 0);
+}
+
+/* Recursively emit JSON objects for every recorded segment under base/rel. */
 static void list_recordings(FCGX_Request* r, const char* base, const char* rel,
                             int depth, int* first) {
     if (depth > 8)
@@ -921,8 +933,7 @@ static void list_recordings(FCGX_Request* r, const char* base, const char* rel,
         if (S_ISDIR(st.st_mode)) {
             list_recordings(r, base, childrel, depth + 1, first);
         } else if (S_ISREG(st.st_mode)) {
-            size_t len = strlen(e->d_name);
-            if (len < 4 || strcasecmp(e->d_name + len - 4, ".mp4") != 0)
+            if (!is_recording_name(e->d_name))
                 continue;
             FCGX_FPrintF(r->out, "%s{\"path\":\"", *first ? "" : ",");
             json_puts_escaped(r->out, childrel);
@@ -936,7 +947,7 @@ static void list_recordings(FCGX_Request* r, const char* base, const char* rel,
 }
 
 /* Emit JSON strings for every directory under base that directly contains
- * .mp4 recordings; with the default recordPath layout those are exactly the
+ * recorded segments; with the default recordPath layout those are exactly the
  * stream path names the recorder writes (%path may itself contain slashes,
  * hence the recursion). */
 static void streams_walk(FCGX_Request* r, const char* base, const char* rel,
@@ -953,17 +964,16 @@ static void streams_walk(FCGX_Request* r, const char* base, const char* rel,
     if (!d)
         return;
     struct dirent* e;
-    int has_mp4 = 0;
+    int has_seg = 0;
     while ((e = readdir(d))) {
         if (e->d_name[0] == '.')
             continue;
-        size_t len = strlen(e->d_name);
-        if (len > 4 && strcasecmp(e->d_name + len - 4, ".mp4") == 0) {
-            has_mp4 = 1;
+        if (is_recording_name(e->d_name)) {
+            has_seg = 1;
             break;
         }
     }
-    if (has_mp4 && rel[0]) {
+    if (has_seg && rel[0]) {
         FCGX_FPrintF(r->out, "%s\"", *first ? "" : ",");
         json_puts_escaped(r->out, rel);
         FCGX_FPrintF(r->out, "\"");
@@ -1351,22 +1361,26 @@ static void send_recording(FCGX_Request* r, const char* base, const char* file) 
     }
 
     long long length = end - start + 1;
+    size_t     flen  = strlen(file);
+    const char* ctype =
+        (flen > 3 && strcasecmp(file + flen - 3, ".ts") == 0) ? "video/mp2t"
+                                                              : "video/mp4";
     if (partial) {
         FCGX_FPrintF(r->out,
                      "Status: 206 Partial Content\r\n"
-                     "Content-Type: video/mp4\r\n"
+                     "Content-Type: %s\r\n"
                      "Accept-Ranges: bytes\r\n"
                      "Content-Range: bytes %lld-%lld/%lld\r\n"
                      "Content-Length: %lld\r\n"
                      "Cache-Control: no-store\r\n\r\n",
-                     start, end, total, length);
+                     ctype, start, end, total, length);
     } else {
         FCGX_FPrintF(r->out,
-                     "Content-Type: video/mp4\r\n"
+                     "Content-Type: %s\r\n"
                      "Accept-Ranges: bytes\r\n"
                      "Content-Length: %lld\r\n"
                      "Cache-Control: no-store\r\n\r\n",
-                     length);
+                     ctype, length);
     }
 
     /* MediaMTX records an "empty moov" (zero duration in the header), but the

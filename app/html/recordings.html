@@ -268,7 +268,7 @@
           el.textContent = 'Storage: ' + fmtSize(st.total - st.free) + ' used of ' +
                            fmtSize(st.total) + ' (' + fmtSize(st.free) + ' free)';
         } else {
-          el.textContent = '';
+          el.textContent = st.error ? 'Storage: ' + st.error : '';
         }
       } catch (e) {
         el.textContent = '';
@@ -323,10 +323,19 @@
           `<td class="size">${fmtSize(it.size)}</td>` +
           `<td class="actions"></td>`;
         const actions = tr.querySelector('.actions');
+        const isTs = /\.ts$/i.test(it.path);
         const play = document.createElement('button');
         play.textContent = 'Play';
         play.className = 'primary';
-        play.onclick = () => playRecording(it, url);
+        if (isTs) {
+          play.disabled = true;
+          play.title = 'MPEG-TS segments cannot be played in the browser, and ' +
+                       'the playback timeline does not support them either. ' +
+                       'Download the file, or set recordFormat: fmp4 to record ' +
+                       'segments this page can play.';
+        } else {
+          play.onclick = () => playRecording(it, url);
+        }
         const dl = document.createElement('a');
         dl.textContent = 'Download';
         dl.href = url;

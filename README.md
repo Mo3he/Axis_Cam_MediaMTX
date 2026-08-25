@@ -21,6 +21,7 @@ with a built-in web interface for editing its configuration.
 - [Compatibility](#compatibility)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Recording storage](#recording-storage)
 - [Viewing live streams](#viewing-live-streams)
 - [Viewing recordings](#viewing-recordings)
 - [Ports & security](#ports--security)
@@ -55,8 +56,8 @@ router" that routes media streams from one end to the other.
   previous configuration (restorable with **Load backup**), and after a restart
   the editor watches the server and warns if the new configuration makes
   MediaMTX crash-loop.
-- **SD card recording:** the default `recordPath` points to the camera SD card;
-  recording is disabled by default and can be enabled per path.
+- **Recording:** disabled by default and enabled per path. Before enabling it,
+  choose a storage location: see [Recording storage](#recording-storage).
 - Supervised process: MediaMTX is automatically relaunched if it exits.
 
 ## Compatibility
@@ -108,6 +109,44 @@ page provides a full editor for `mediamtx.yml`:
 The editor is admin-access only and authenticates against the device user pool,
 the same as VAPIX.
 
+## Recording storage
+
+Recording is disabled by default, and **`recordPath` is deliberately left unset**
+in the bundled configuration. There is no value that is correct on every device,
+because the storage area is named after the disk that is fitted. Choose one
+before you enable recording.
+
+| Device | Storage area | `recordPath` |
+| --- | --- | --- |
+| Camera with an SD card | `SD_DISK` | `/var/spool/storage/areas/SD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f` |
+| Recorder with an internal disk (AXIS S30 series and similar) | `HDD_DISK` | `/var/spool/storage/areas/HDD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f` |
+
+Both lines are present, commented out, in the bundled configuration: uncomment
+the one that matches your device. If neither does, the app's **Show log** view
+and the device shell both list the mounted areas under
+`/var/spool/storage/areas/`.
+
+> **Only the `root` directory is the real disk.** Everything above
+> `.../<AREA>/root` belongs to `/var/spool`, which is a RAM filesystem.
+> Recording there is lost on every reboot and can exhaust the device's memory.
+> The giveaway is the storage figure on the Recordings page: if it reports a few
+> hundred megabytes rather than the size of your card or disk, `recordPath` is
+> pointing at RAM. Versions up to and including 1.20.1 shipped a default that
+> did exactly this; if you are upgrading, check the line and correct it.
+
+### Recording format
+
+`recordFormat: fmp4` (the default) writes `.mp4` segments and is what this
+application is built around: the playback timeline, clip export and inline
+playback all require it.
+
+`recordFormat: mpegts` writes `.ts` segments. These are listed on the Recordings
+page and can be downloaded and deleted, but MediaMTX's own playback server
+rejects them (*"MPEG-TS format is not supported yet"*), so the timeline and clip
+export are unavailable, and browsers cannot play a raw MPEG-TS file, so the
+**Play** button is disabled. Use `mpegts` only if something downstream needs it;
+otherwise stay on `fmp4`.
+
 ## Viewing live streams
 
 The **Live** page (`https://<device ip>/local/MediaMTX/live.html`) lists every
@@ -132,9 +171,9 @@ authentication.
 ## Viewing recordings
 
 When recording is enabled for a path, segments are written to the storage
-location set by `recordPath` (the SD card by default; some recorder devices use
-an internal disk such as `HDD_DISK`). Open the **Recordings** page from the link
-in the settings page header, or browse to
+location set by `recordPath`, which you must choose for your device: see
+[Recording storage](#recording-storage). Open the **Recordings** page from the
+link in the settings page header, or browse to
 `https://<device ip>/local/MediaMTX/recordings.html`. Like the config editor, it
 is admin-access only.
 
@@ -160,9 +199,10 @@ playbackAddress: 127.0.0.1:9996
 
 ### Segment files
 
-Below the timeline, the recorded `.mp4` segments are listed with a stream and
-date/time filter; each can be played inline, downloaded, or deleted. The page
-also shows how full the recording storage is.
+Below the timeline, the recorded segments are listed with a stream and date/time
+filter; each can be played inline, downloaded, or deleted. `.ts` segments
+(`recordFormat: mpegts`) are listed and can be downloaded or deleted but not
+played. The page also shows how full the recording storage is.
 
 Your configuration is stored in the app's persistent `localdata` directory and
 is kept across application upgrades. Uninstalling the ACAP removes all files,
@@ -171,25 +211,31 @@ path.
 
 ## Ports & security
 
-By default MediaMTX opens a wide set of media and control ports on the camera's
-network interface:
+These are the ports the bundled configuration actually opens on the device:
 
-| Service | Port |
-|---|---|
-| RTSP / RTSPS | `8554` / `8322` |
-| RTMP | `1935` |
-| HLS | `8888` |
-| WebRTC | `8889` |
-| RTP / RTCP | `8000` / `8001` |
-| Control API | `9997` |
-| Metrics | `9998` |
-| pprof (debug) | `9999` |
-| Playback (localhost only) | `127.0.0.1:9996` |
+| Service | Port | Enabled by default |
+|---|---|---|
+| RTSP / RTSPS | `8554` / `8322` | Yes |
+| RTP / RTCP | `8000` / `8001` (UDP) | Yes |
+| HLS | `8888` | Yes |
+| WebRTC | `8889`, `8189` (UDP/ICE) | Yes |
+| Control API | `9997` | Yes, the web pages need it |
+| Playback | `127.0.0.1:9996` | Yes, localhost only |
+| RTMP | `1935` | No |
+| SRT | `8890` (UDP) | No |
+| MoQ | `8892`, `8893` (UDP) | No |
+| Metrics | `9998` | No |
+| pprof (debug) | `9999` | No |
 
-> **Security:** in production, disable the control **API (`9997`)** and the
-> **pprof debug server (`9999`)** in `mediamtx.yml` unless you explicitly need
-> them, and firewall the media ports to trusted networks. The playback server is
-> already bound to localhost only.
+MediaMTX itself enables RTMP, SRT and MoQ; this package turns them off so a
+camera does not open those ports unless you ask it to. Set `rtmp`, `srt` or
+`moq` to `yes` in `mediamtx.yml` if you need them.
+
+> **Security:** firewall the media ports to trusted networks. The control API on
+> `9997` is unauthenticated and is required by the settings and Recordings
+> pages: if you do not need those pages, set `api: no`. The playback server is
+> bound to localhost and is reached only through the authenticated `config.cgi`
+> proxy.
 
 ## Build from source
 

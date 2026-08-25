@@ -437,6 +437,38 @@ static int test_resolve_recording(void) {
     CHECK(resolve_recording(&rq, "/tmp", "/etc/passwd", real) == -1);
     CHECK(resolve_recording(&rq, "/tmp", "", real) == -1);
 
+    /* an unset recordPath yields an empty base, which must not resolve */
+    CHECK(resolve_recording(&rq, "", "clip.mp4", real) == -1);
+
+    return 0;
+}
+
+static int test_is_recording_name(void) {
+    /* recordFormat fmp4 */
+    CHECK(is_recording_name("2026-07-02_12-00-00-000000.mp4") == 1);
+    CHECK(is_recording_name("CLIP.MP4") == 1);
+    /* recordFormat mpegts */
+    CHECK(is_recording_name("2026-07-02_12-00-00-000000.ts") == 1);
+    CHECK(is_recording_name("CLIP.TS") == 1);
+
+    CHECK(is_recording_name("notes.txt") == 0);
+    CHECK(is_recording_name("events.db") == 0);
+    /* a bare extension is not a segment */
+    CHECK(is_recording_name(".mp4") == 0);
+    CHECK(is_recording_name(".ts") == 0);
+    /* .mp4 must not be matched by the .ts suffix test */
+    CHECK(is_recording_name("clip.mts") == 0);
+
+    return 0;
+}
+
+static int test_get_record_base_unset(void) {
+    /* CONF_FILE does not exist on the host, so this exercises the no-config
+     * case: the old build substituted a hardcoded tmpfs path here. */
+    char base[PATH_MAX];
+    get_record_base(base, sizeof(base));
+    CHECK(base[0] == '\0');
+
     return 0;
 }
 
@@ -451,6 +483,8 @@ int main(void) {
     if (test_conf_scalar_line()) return 1;
     if (test_clip_filename())    return 1;
     if (test_resolve_recording()) return 1;
+    if (test_is_recording_name()) return 1;
+    if (test_get_record_base_unset()) return 1;
     printf("all %d checks passed\n", tests_run);
     return 0;
 }

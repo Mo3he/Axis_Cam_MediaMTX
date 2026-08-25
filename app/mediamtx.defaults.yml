@@ -29,7 +29,7 @@ writeQueueSize: 512
 # Maximum size of outgoing UDP payloads.
 # It defaults to the maximum packet size on ethernet (1500) minus IPv6 and UDP headers (48).
 # This can be decreased to avoid fragmentation on networks with a low MTU.
-udpMaxPayloadSize: 1472
+udpMaxPayloadSize: 1452
 # Size of the read buffer of every UDP socket.
 # This can be increased to decrease packet losses.
 # It defaults to the default value of the operating system.
@@ -93,10 +93,10 @@ authInternalUsers:
 
 # HTTP-based authentication.
 # URL called to perform authentication. Every time a user wants
-# to authenticate, the server calls this URL with the POST method
+# to perform an action, the server calls this URL with the POST method
 # and a payload described in the documentation.
-# If the response code is 20x, authentication is accepted, otherwise
-# it is discarded.
+# If the response code is 20x, the action is allowed, otherwise
+# it is forbidden.
 authHTTPAddress:
 # If the HTTP authentication URL has a self-signed or invalid certificate,
 # you can provide the fingerprint of the certificate in order to
@@ -147,6 +147,7 @@ authJWTAudience:
 # Global settings -> Control API
 
 # Enable the control API server, which allows to control the server.
+# Required: the settings and Recordings pages read server status through it.
 api: true
 # Address of the TCP/HTTP listener.
 apiAddress: :9997
@@ -293,7 +294,8 @@ rtspTrustedProxies: []
 # Global settings -> RTMP server
 
 # Enable the RTMP server, which allows to publish and read streams with the RTMP protocol.
-rtmp: true
+# Disabled here so a camera does not open port 1935 unless it is asked to.
+rtmp: false
 # Use the secure protocol variant (RTMPS).
 # Available values are "no", "strict", "optional".
 rtmpEncryption: "no"
@@ -437,7 +439,8 @@ webrtcTrackGatherTimeout: 2s
 # Global settings -> SRT server
 
 # Enable the SRT server, which allows to publish and read streams with the SRT protocol.
-srt: true
+# Disabled here so a camera does not open port 8890/udp unless it is asked to.
+srt: false
 # Address of the UDP/SRT listener.
 srtAddress: :8890
 
@@ -445,13 +448,16 @@ srtAddress: :8890
 # MoQ server
 
 # Enable the MoQ (Media over QUIC) server, which allows to publish and read streams with the MoQ protocol.
-moq: true
+# Disabled here so a camera does not open ports 8892 and 8893 unless it is asked to.
+moq: false
 # Address of the TCP/HTTP2 listener.
 # This hosts the web client.
 moqHTTP2Address: :8892
 # Address of the UDP/HTTP3 listener.
 # This hosts the WebTransport endpoint.
 moqHTTP3Address: :8892
+# Address of the UDP/QUIC listener used for native MoQ-over-QUIC.
+moqQUICAddress: :8893
 # Path to the server key.
 # This can be generated with:
 # openssl genrsa -out server.key 2048
@@ -476,28 +482,27 @@ pathDefaults:
 
   # Source of the stream. This can be:
   # * publisher -> the stream is provided by a RTSP, RTMP, WebRTC or SRT client
-  # * rtsp://existing-url -> the stream is pulled from another RTSP server / camera
-  # * rtsps://existing-url -> the stream is pulled from another RTSP server / camera with RTSPS
-  # * rtsp+http://existing-url -> the stream is pulled from another RTSP server / camera, with HTTP tunneling
-  # * rtsps+http://existing-url -> the stream is pulled from another RTSP server / camera, with HTTPS tunneling
-  # * rtsp+ws://existing-url -> the stream is pulled from another RTSP server / camera, with WebSocket tunneling
-  # * rtsps+ws://existing-url -> the stream is pulled from another RTSP server / camera, with secure WebSocket tunneling
-  # * rtmp://existing-url -> the stream is pulled from another RTMP server / camera
-  # * rtmps://existing-url -> the stream is pulled from another RTMP server / camera with RTMPS
-  # * http://existing-url/stream.m3u8 -> the stream is pulled from another HLS server / camera
-  # * https://existing-url/stream.m3u8 -> the stream is pulled from another HLS server / camera with HTTPS
+  # * rtsp://user:pass@host:port/path -> the stream is pulled from another RTSP server / camera
+  # * rtsps://user:pass@host:port/path -> the stream is pulled from another RTSP server / camera with RTSPS
+  # * rtsp+http://user:pass@host:port/path -> the stream is pulled from another RTSP server / camera, with HTTP tunneling
+  # * rtsps+http://user:pass@host:port/path -> the stream is pulled from another RTSP server / camera, with HTTPS tunneling
+  # * rtsp+ws://user:pass@host:port/path -> the stream is pulled from another RTSP server / camera, with WebSocket tunneling
+  # * rtsps+ws://user:pass@host:port/path -> the stream is pulled from another RTSP server / camera, with secure WebSocket tunneling
+  # * rtmp://user:pass@host:port/path#streamKey -> the stream is pulled from another RTMP server / camera
+  # * rtmps://user:pass@host:port/path#streamKey -> the stream is pulled from another RTMP server / camera with RTMPS
+  # * http://user:pass@host:port/stream.m3u8 -> the stream is pulled from another HLS server / camera
+  # * https://user:pass@host:port/stream.m3u8 -> the stream is pulled from another HLS server / camera with HTTPS
   # * udp+mpegts://ip:port -> the stream is pulled from MPEG-TS over UDP, by listening on the specified address
-  # * unix+mpegts://socket -> the stream is pulled from MPEG-TS over Unix socket, by using the socket
+  # * unix+mpegts://socketPath -> the stream is pulled from MPEG-TS over a Unix socket
   # * udp+rtp://ip:port -> the stream is pulled from RTP over UDP, by listening on the specified address
-  # * srt://existing-url -> the stream is pulled from another SRT server / camera
-  # * whep://existing-url -> the stream is pulled from another WebRTC server / camera with HTTP+WHEP
-  # * wheps://existing-url -> the stream is pulled from another WebRTC server / camera with HTTPS+WHEP
+  # * srt://host:port?streamid=streamid -> the stream is pulled from another SRT server / camera
+  # * moqt://user:pass@host:port/path -> the stream is pulled from another MoQ server
+  # * whep://host:port/path -> the stream is pulled from another WebRTC server / camera with HTTP+WHEP
+  # * wheps://host:port/path -> the stream is pulled from another WebRTC server / camera with HTTPS+WHEP
   # * redirect -> the stream is provided by another path or server
-  # * rpiCamera -> the stream is provided by a Raspberry Pi Camera
-  # The following variables can be used in the source string:
+  # The following variables can be used:
   # * $MTX_QUERY: query parameters (passed by first reader)
-  # * $G1, $G2, ...: regular expression groups, if path name is
-  #   a regular expression.
+  # * $G1, $G2, ...: regular expression groups, if path name is a regular expression.
   source: publisher
   # If the source is a URL, and the source TLS certificate is self-signed
   # or invalid, you can provide the fingerprint of the certificate in order to
@@ -539,6 +544,32 @@ pathDefaults:
   alwaysAvailableFile: ""
 
   ###############################################
+  # Default path settings -> Forward
+
+  # Forward the stream of this path to one or more external servers.
+  forward: []
+    # forward destination. This can be:
+    # * rtsp://user:pass@host:port/path -> the stream is forwarded to another RTSP server
+    # * rtsps://user:pass@host:port/path -> the stream is forwarded to another RTSP server with RTSPS
+    # * rtmp://user:pass@host:port/path#streamKey -> the stream is forwarded to another RTMP server
+    # * rtmps://user:pass@host:port/path#streamKey -> the stream is forwarded to another RTMP server with RTMPS
+    # * srt://host:port?streamid=streamid -> the stream is forwarded to another SRT server
+    # * whip://host:port/path/whip -> the stream is forwarded to another WebRTC server with WHIP over HTTP
+    # * whips://host:port/path/whip -> the stream is forwarded to another WebRTC server with WHIP over HTTPS
+    # The following variables can be used:
+    # * $MTX_PATH: path name
+    # * $G1, $G2, ...: regular expression groups, if path name is a regular expression.
+    # - dest:
+    #   # If the destination TLS certificate is self-signed
+    #   # or invalid, you can provide the fingerprint of the certificate in order to
+    #   # validate it anyway. It can be obtained by running:
+    #   # openssl s_client -connect dest_ip:dest_port </dev/null 2>/dev/null | sed -n '/BEGIN/,/END/p' > server.crt
+    #   # openssl x509 -in server.crt -noout -fingerprint -sha256 | cut -d "=" -f2 | tr -d ':'
+    #   destFingerprint:
+    #   # Token to insert in the Authorization: Bearer header when using WHIP.
+    #   whipBearerToken: ""
+
+  ###############################################
   # Default path settings -> Record
 
   # Record streams to disk.
@@ -547,15 +578,37 @@ pathDefaults:
   # Extension is added automatically.
   # Available variables are %path (path name), %Y %m %d (year, month, day),
   # %H %M %S (hours, minutes, seconds), %f (microseconds), %z (time zone), %s (unix epoch).
-  recordPath: /var/spool/storage/areas/SD_DISK/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  #
+  # THIS HAS NO DEFAULT ON PURPOSE. Uncomment exactly one of the two lines
+  # below before enabling recording, choosing the one that matches your
+  # product. The storage area is named after the disk, so the correct path is
+  # not the same on a camera as it is on a recorder.
+  #
+  # Only the ".../<AREA>/root" directory is the real disk. Everything above it
+  # belongs to /var/spool, which is a RAM filesystem: recording there is lost
+  # on reboot and can exhaust the device's memory. If the application reports
+  # only a few hundred megabytes of free space, you are on the RAM filesystem.
+  #
+  # Camera with an SD card:
+  # recordPath: /var/spool/storage/areas/SD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  #
+  # Recorder with an internal disk (AXIS S30 series and similar):
+  # recordPath: /var/spool/storage/areas/HDD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  #
+  # If neither matches, list the mounted areas on the device and use the one
+  # you find: ls /var/spool/storage/areas/
   # Format of recorded segments.
   # Available formats are "fmp4" (fragmented MP4) and "mpegts" (MPEG-TS).
+  # Keep fmp4 unless something downstream requires MPEG-TS: the playback
+  # timeline, clip export and in-browser playback all need fmp4, because
+  # MediaMTX's playback server does not support MPEG-TS. With mpegts the
+  # Recordings page can only list, download and delete segments.
   recordFormat: fmp4
   # fMP4 segments are concatenation of small MP4 files (parts), each with this duration.
   # MPEG-TS segments are concatenation of 188-bytes packets, flushed to disk with this period.
   # When a system failure occurs, the last part gets lost.
   # Therefore, the part duration is equal to the RPO (recovery point objective).
-  recordPartDuration: 100ms
+  recordPartDuration: 1s
   # This prevents RAM exhaustion.
   recordMaxPartSize: 50M
   # Minimum duration of each segment.
@@ -601,13 +654,19 @@ pathDefaults:
   # values 0 < x < 1 play slow motion.
   rtspScale:
   # Range of ports used as source port in outgoing UDP packets.
-  rtspUDPSourcePortRange: [10000, 65535]
+  rtspUDPSourcePortRange: [32768, 60999]
 
   ###############################################
   # Default path settings -> RTP source (when source is RTP)
 
   # session description protocol (SDP) of the RTP stream.
   rtpSDP:
+
+  ###############################################
+  # Default path settings -> MoQ source (when source is a MoQ URL)
+
+  # Transport protocol used to pull the stream. available values are "quic", "webtransport".
+  moqTransport: quic
 
   ###############################################
   # Default path settings -> WebRTC / WHEP source (when source is WHEP)
@@ -627,101 +686,6 @@ pathDefaults:
   # Path to which clients will be redirected.
   # It can be a relative path (i.e. /otherstream) or an absolute RTSP URL.
   sourceRedirect:
-
-  ###############################################
-  # Default path settings -> Raspberry Pi Camera source (when source is "rpiCamera")
-
-  # ID of the camera.
-  rpiCameraCamID: 0
-  # Whether this is a secondary stream.
-  rpiCameraSecondary: false
-  # Width of frames.
-  rpiCameraWidth: 1920
-  # Height of frames.
-  rpiCameraHeight: 1080
-  # Flip horizontally.
-  rpiCameraHFlip: false
-  # Flip vertically.
-  rpiCameraVFlip: false
-  # Brightness [-1, 1].
-  rpiCameraBrightness: 0
-  # Contrast [0, 16].
-  rpiCameraContrast: 1
-  # Saturation [0, 16].
-  rpiCameraSaturation: 1
-  # Sharpness [0, 16].
-  rpiCameraSharpness: 1
-  # Exposure mode.
-  # values: normal, short, long, custom.
-  rpiCameraExposure: normal
-  # Auto-white-balance mode.
-  # (auto, incandescent, tungsten, fluorescent, indoor, daylight, cloudy or custom).
-  rpiCameraAWB: auto
-  # Auto-white-balance fixed gains. This can be used in place of rpiCameraAWB.
-  # format: [red,blue].
-  rpiCameraAWBGains: [0, 0]
-  # Denoise operating mode (off, cdn_off, cdn_fast, cdn_hq).
-  rpiCameraDenoise: "off"
-  # Fixed shutter speed, in microseconds.
-  rpiCameraShutter: 0
-  # Metering mode of the AEC/AGC algorithm (centre, spot, matrix or custom).
-  rpiCameraMetering: centre
-  # Fixed gain.
-  rpiCameraGain: 0
-  # EV compensation of the image in range [-10, 10].
-  rpiCameraEV: 0
-  # Region of interest, in format x,y,width,height (all normalized between 0 and 1).
-  rpiCameraROI:
-  # Whether to enable HDR on Raspberry Camera 3.
-  rpiCameraHDR: false
-  # Tuning file.
-  rpiCameraTuningFile:
-  # Sensor mode, in format [width]:[height]:[bit-depth]:[packing]
-  # bit-depth and packing are optional.
-  rpiCameraMode:
-  # frames per second.
-  rpiCameraFPS: 30
-  # Autofocus mode (auto, manual or continuous).
-  rpiCameraAfMode: continuous
-  # Autofocus range (normal, macro or full).
-  rpiCameraAfRange: normal
-  # Autofocus speed (normal or fast).
-  rpiCameraAfSpeed: normal
-  # Lens position (for manual autofocus only), will be set to focus to a specific distance
-  # calculated by the following formula: d = 1 / value
-  # Examples: 0 moves the lens to infinity.
-  #           0.5 moves the lens to focus on objects 2m away.
-  #           2 moves the lens to focus on objects 50cm away.
-  rpiCameraLensPosition: 0.0
-  # Autofocus window, in the form x,y,width,height where the coordinates
-  # are given as a proportion of the entire image.
-  rpiCameraAfWindow:
-  # Manual flicker correction period, in microseconds.
-  rpiCameraFlickerPeriod: 0
-  # Enables printing text on each frame.
-  rpiCameraTextOverlayEnable: false
-  # Text that is printed on each frame.
-  # format is the one of the strftime() function.
-  rpiCameraTextOverlay: "%Y-%m-%d %H:%M:%S - MediaMTX"
-  # Codec (auto, hardwareH264, softwareH264 or mjpeg).
-  # When is "auto", it defaults to:
-  # * hardwareH264 when stream is primary and hardware encoder is available
-  # * softwareH264 when stream is primary and hardware encoder is not available
-  # * mjpeg when stream is secondary
-  rpiCameraCodec: auto
-  # Period between IDR frames (when codec is hardwareH264 or softwareH264).
-  rpiCameraIDRPeriod: 60
-  # Bitrate (when codec is hardwareH264 or softwareH264).
-  rpiCameraBitrate: 5000000
-  # H264 profile (auto, baseline, main or high).
-  # When is "auto", it defaults to:
-  # * main when codec is hardwareH264
-  # * baseline when codec is softwareH264
-  rpiCameraH264Profile: auto
-  # H264 level (4.0, 4.1 or 4.2).
-  rpiCameraH264Level: "4.1"
-  # M-JPEG quality (0-100).
-  rpiCameraMJPEGQuality: 60
 
   ###############################################
   # Default path settings -> Hooks
@@ -761,9 +725,8 @@ pathDefaults:
   # Environment variables are the same as runOnDemand.
   runOnUnDemand:
 
-  # Command to run when the stream is ready to be read, whenever it is
-  # published by a client or pulled from a server / camera.
-  # This is terminated with SIGINT when the stream is not ready anymore.
+  # Command to run when the stream is available to be read.
+  # This is terminated with SIGINT when the stream is not available anymore.
   # The following environment variables are available:
   # * MTX_PATH: path name
   # * MTX_QUERY: query parameters (passed by publisher) (url-encoded)
@@ -772,12 +735,30 @@ pathDefaults:
   # * RTSP_PORT: RTSP server port
   # * G1, G2, ...: regular expression groups, if path name is
   #   a regular expression.
-  runOnReady:
+  runOnAvailable:
   # Restart the command if it exits.
-  runOnReadyRestart: false
+  runOnAvailableRestart: false
   # Command to run when the stream is not available anymore.
-  # Environment variables are the same as runOnReady.
-  runOnNotReady:
+  # Environment variables are the same as runOnAvailable.
+  runOnUnavailable:
+
+  # Command to run when the stream is online, which means
+  # that the stream is available and provided by a online source (not an offline segment).
+  # This is terminated with SIGINT when the stream is not online anymore.
+  # The following environment variables are available:
+  # * MTX_PATH: path name
+  # * MTX_QUERY: query parameters (passed by publisher) (url-encoded)
+  # * MTX_SOURCE_TYPE: source type
+  # * MTX_SOURCE_ID: source ID
+  # * RTSP_PORT: RTSP server port
+  # * G1, G2, ...: regular expression groups, if path name is
+  #   a regular expression.
+  runOnOnline:
+  # Restart the command if it exits.
+  runOnOnlineRestart: false
+  # Command to run when the stream is not online anymore.
+  # Environment variables are the same as runOnOnline.
+  runOnOffline:
 
   # Command to run when a client starts reading.
   # This is terminated with SIGINT when a client stops reading.
