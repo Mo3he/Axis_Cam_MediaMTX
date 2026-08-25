@@ -41,6 +41,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   keep their own configuration and are unaffected.
 - Removed the Raspberry Pi camera settings from the default configuration; that
   source type cannot exist on an Axis device.
+- The `paths` section of the default configuration now carries worked examples:
+  the device's own sensor, the same with an explicit codec and resolution, and a
+  camera elsewhere on the network. It previously held only upstream's
+  `source: rtsp://my_camera` placeholder.
 - The README port table now matches what the package actually opens. It listed
   the metrics and pprof servers, which are disabled, and omitted SRT, MoQ and
   the WebRTC ICE port.

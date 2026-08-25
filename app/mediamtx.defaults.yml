@@ -806,9 +806,29 @@ pathDefaults:
 # for example "~^(test1|test2)$" will match both "test1" and "test2",
 # for example "~^prefix" will match all paths that start with "prefix".
 paths:
-  # example:
-  # my_camera:
-  #   source: rtsp://my_camera
+  # Examples. Uncomment one and edit it, or add your own.
+  #
+  # This device's own sensor. Address it as 127.0.0.1 so the video never
+  # leaves the device, and use a device account that is allowed to view video.
+  # local:
+  #   source: rtsp://user:password@127.0.0.1/axis-media/media.amp
+  #
+  # The same, asking the sensor for a specific codec and resolution:
+  # local:
+  #   source: rtsp://user:password@127.0.0.1/axis-media/media.amp?videocodec=h264&resolution=1920x1080
+  #
+  # Another camera on the network, such as one plugged into a recorder:
+  # front_door:
+  #   source: rtsp://user:password@192.168.1.50/axis-media/media.amp
+  #
+  # Notes:
+  # * The password is stored here in plain text, so prefer an account with
+  #   view-only rights. Percent-encode any special characters in it (! is %21)
+  #   and put the whole URL in single quotes if it contains # or trailing
+  #   spaces.
+  # * "sourceOnDemand: yes" pulls video only while someone is watching, which
+  #   saves power, but the source is also closed when nobody is connected, so
+  #   nothing is recorded during that time. Leave it off on recorded paths.
 
   # Settings under path "all_others" are applied to all paths that
   # do not match another entry.
