@@ -48,6 +48,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - The README port table now matches what the package actually opens. It listed
   the metrics and pprof servers, which are disabled, and omitted SRT, MoQ and
   the WebRTC ICE port.
+- Fixed: the commented-out examples in the default configuration could not be
+  switched on the way they invited. They were written as `# recordPath: ...`,
+  so deleting the `#` left one space too many, the file no longer parsed, and
+  MediaMTX crash-looped with `value is not allowed in this context` and no
+  indication of what was wrong. Every example is now written so that deleting
+  the `#` alone produces correctly indented YAML. `webrtcICEServers2`,
+  `alwaysAvailableTracks` and `forward` reject an empty value, so they keep
+  their `[]` and their examples now say to replace that line instead. A test
+  uncomments every example and parses the result, so the trap cannot come back.
+- Fixed: pulled RTSP sources now use `rtspTransport: tcp` instead of upstream's
+  `automatic`, which prefers UDP. A camera pulling its own sensor over
+  `127.0.0.1` lost RTP packets, which corrupted the H.264 stream, logged
+  `invalid FU-A packet` and `too many reordered frames`, and restarted the
+  recorder every few seconds so recordings were split into fragments a few
+  seconds long. UDP never failed outright, so the fallback to TCP never
+  triggered.
 
 ## [1.19.2-Signed] - 2026-07-21 - MediaMTX 1.19.2 (Signed)
 

@@ -23,6 +23,9 @@ jobs:
              -Itests/fcgi_stub tests/test_mp4.c -o tests/test_mp4
           ./tests/test_mp4
 
+      - name: Validate uncommentable YAML examples
+        run: ruby tests/test_defaults.rb
+
   build:
     runs-on: ubuntu-latest
     strategy:

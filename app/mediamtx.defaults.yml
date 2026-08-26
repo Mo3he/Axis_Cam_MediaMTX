@@ -421,13 +421,17 @@ webrtcAdditionalHosts: []
 # ICE servers. Needed only when local listeners can't be reached by clients.
 # STUN servers allow to obtain and share the public IP of the server.
 # TURN/TURNS servers force all traffic through them.
+# MediaMTX refuses to start on an empty value here, so unlike the examples
+# elsewhere this one cannot be enabled by uncommenting: replace the line
+# below with the block under it.
 webrtcICEServers2: []
-  # - url: stun:stun.l.google.com:19302
-  # if user is "AUTH_SECRET", then authentication is secret based.
-  # the secret must be inserted into the password field.
-  # username: ''
-  # password: ''
-  # clientOnly: false
+#webrtcICEServers2:
+#  - url: stun:stun.l.google.com:19302
+#    # if user is "AUTH_SECRET", then authentication is secret based.
+#    # the secret must be inserted into the password field.
+#    username: ''
+#    password: ''
+#    clientOnly: false
 # Maximum time to gather STUN candidates.
 webrtcSTUNGatherTimeout: 5s
 # Time to wait for the WebRTC handshake to complete.
@@ -532,14 +536,18 @@ pathDefaults:
   # Enable always-available mode, in which an offline segment is played on repeat when the stream is not available.
   alwaysAvailable: false
   # Tracks of the default offline segment.
+  # Available values are: AV1, VP9, H265, H264, Opus, MPEG4Audio, G711, LPCM
+  # MediaMTX refuses to start on an empty value here, so unlike the examples
+  # elsewhere this one cannot be enabled by uncommenting: replace the line
+  # below with the block under it.
   alwaysAvailableTracks: []
-    # Available values are: AV1, VP9, H265, H264, Opus, MPEG4Audio, G711, LPCM
-    # - codec: H264
-    #   # in case of MPEG4Audio, G711, LPCM, sampleRate and ChannelCount must be provided too.
-    #   sampleRate: 48000
-    #   channelCount: 2
-    #   # in case of G711, muLaw must be provided too.
-    #   muLaw: false
+  #alwaysAvailableTracks:
+  #  - codec: H264
+  #    # in case of MPEG4Audio, G711, LPCM, sampleRate and ChannelCount must be provided too.
+  #    sampleRate: 48000
+  #    channelCount: 2
+  #    # in case of G711, muLaw must be provided too.
+  #    muLaw: false
   # An MP4 file can be used instead of the default offline segment.
   alwaysAvailableFile: ""
 
@@ -547,27 +555,31 @@ pathDefaults:
   # Default path settings -> Forward
 
   # Forward the stream of this path to one or more external servers.
+  # forward destination. This can be:
+  # * rtsp://user:pass@host:port/path -> the stream is forwarded to another RTSP server
+  # * rtsps://user:pass@host:port/path -> the stream is forwarded to another RTSP server with RTSPS
+  # * rtmp://user:pass@host:port/path#streamKey -> the stream is forwarded to another RTMP server
+  # * rtmps://user:pass@host:port/path#streamKey -> the stream is forwarded to another RTMP server with RTMPS
+  # * srt://host:port?streamid=streamid -> the stream is forwarded to another SRT server
+  # * whip://host:port/path/whip -> the stream is forwarded to another WebRTC server with WHIP over HTTP
+  # * whips://host:port/path/whip -> the stream is forwarded to another WebRTC server with WHIP over HTTPS
+  # The following variables can be used:
+  # * $MTX_PATH: path name
+  # * $G1, $G2, ...: regular expression groups, if path name is a regular expression.
+  # MediaMTX refuses to start on an empty value here, so unlike the examples
+  # elsewhere this one cannot be enabled by uncommenting: replace the line
+  # below with the block under it.
   forward: []
-    # forward destination. This can be:
-    # * rtsp://user:pass@host:port/path -> the stream is forwarded to another RTSP server
-    # * rtsps://user:pass@host:port/path -> the stream is forwarded to another RTSP server with RTSPS
-    # * rtmp://user:pass@host:port/path#streamKey -> the stream is forwarded to another RTMP server
-    # * rtmps://user:pass@host:port/path#streamKey -> the stream is forwarded to another RTMP server with RTMPS
-    # * srt://host:port?streamid=streamid -> the stream is forwarded to another SRT server
-    # * whip://host:port/path/whip -> the stream is forwarded to another WebRTC server with WHIP over HTTP
-    # * whips://host:port/path/whip -> the stream is forwarded to another WebRTC server with WHIP over HTTPS
-    # The following variables can be used:
-    # * $MTX_PATH: path name
-    # * $G1, $G2, ...: regular expression groups, if path name is a regular expression.
-    # - dest:
-    #   # If the destination TLS certificate is self-signed
-    #   # or invalid, you can provide the fingerprint of the certificate in order to
-    #   # validate it anyway. It can be obtained by running:
-    #   # openssl s_client -connect dest_ip:dest_port </dev/null 2>/dev/null | sed -n '/BEGIN/,/END/p' > server.crt
-    #   # openssl x509 -in server.crt -noout -fingerprint -sha256 | cut -d "=" -f2 | tr -d ':'
-    #   destFingerprint:
-    #   # Token to insert in the Authorization: Bearer header when using WHIP.
-    #   whipBearerToken: ""
+  #forward:
+  #  - dest:
+  #    # If the destination TLS certificate is self-signed
+  #    # or invalid, you can provide the fingerprint of the certificate in order to
+  #    # validate it anyway. It can be obtained by running:
+  #    # openssl s_client -connect dest_ip:dest_port </dev/null 2>/dev/null | sed -n '/BEGIN/,/END/p' > server.crt
+  #    # openssl x509 -in server.crt -noout -fingerprint -sha256 | cut -d "=" -f2 | tr -d ':'
+  #    destFingerprint:
+  #    # Token to insert in the Authorization: Bearer header when using WHIP.
+  #    whipBearerToken: ""
 
   ###############################################
   # Default path settings -> Record
@@ -580,7 +592,7 @@ pathDefaults:
   # %H %M %S (hours, minutes, seconds), %f (microseconds), %z (time zone), %s (unix epoch).
   #
   # THIS HAS NO DEFAULT ON PURPOSE. Uncomment exactly one of the two lines
-  # below before enabling recording, choosing the one that matches your
+  # below by deleting its # character, choosing the one that matches your
   # product. The storage area is named after the disk, so the correct path is
   # not the same on a camera as it is on a recorder.
   #
@@ -590,10 +602,10 @@ pathDefaults:
   # only a few hundred megabytes of free space, you are on the RAM filesystem.
   #
   # Camera with an SD card:
-  # recordPath: /var/spool/storage/areas/SD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  #recordPath: /var/spool/storage/areas/SD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f
   #
   # Recorder with an internal disk (AXIS S30 series and similar):
-  # recordPath: /var/spool/storage/areas/HDD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  #recordPath: /var/spool/storage/areas/HDD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f
   #
   # If neither matches, list the mounted areas on the device and use the one
   # you find: ls /var/spool/storage/areas/
@@ -634,7 +646,12 @@ pathDefaults:
   # Default path settings -> RTSP source (when source is a RTSP or a RTSPS URL)
 
   # Transport protocol used to pull the stream. available values are "automatic", "udp", "multicast", "tcp".
-  rtspTransport: automatic
+  # Upstream defaults to "automatic", which prefers UDP. On a camera pulling its
+  # own sensor over 127.0.0.1 that loses RTP packets, which corrupts H264 and
+  # restarts the recorder every few seconds; UDP never fails outright, so the
+  # automatic fallback to TCP is never triggered. Set "automatic" back if a
+  # source of yours does not support TCP.
+  rtspTransport: tcp
   # Support sources that don't provide server ports or use random server ports. This is a security issue
   # and must be used only when interacting with sources that require it.
   rtspAnyPort: false
@@ -806,20 +823,20 @@ pathDefaults:
 # for example "~^(test1|test2)$" will match both "test1" and "test2",
 # for example "~^prefix" will match all paths that start with "prefix".
 paths:
-  # Examples. Uncomment one and edit it, or add your own.
+  # Examples. Uncomment one by deleting its # characters and edit it, or add your own.
   #
   # This device's own sensor. Address it as 127.0.0.1 so the video never
   # leaves the device, and use a device account that is allowed to view video.
-  # local:
-  #   source: rtsp://user:password@127.0.0.1/axis-media/media.amp
+  #local:
+  #  source: rtsp://user:password@127.0.0.1/axis-media/media.amp
   #
   # The same, asking the sensor for a specific codec and resolution:
-  # local:
-  #   source: rtsp://user:password@127.0.0.1/axis-media/media.amp?videocodec=h264&resolution=1920x1080
+  #local:
+  #  source: rtsp://user:password@127.0.0.1/axis-media/media.amp?videocodec=h264&resolution=1920x1080
   #
   # Another camera on the network, such as one plugged into a recorder:
-  # front_door:
-  #   source: rtsp://user:password@192.168.1.50/axis-media/media.amp
+  #front_door:
+  #  source: rtsp://user:password@192.168.1.50/axis-media/media.amp
   #
   # Notes:
   # * The password is stored here in plain text, so prefer an account with

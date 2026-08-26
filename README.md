@@ -109,6 +109,19 @@ page provides a full editor for `mediamtx.yml`:
 The editor is admin-access only and authenticates against the device user pool,
 the same as VAPIX.
 
+### Enabling a commented-out example
+
+The bundled configuration contains ready-made examples that are commented out.
+Each one is written so that **deleting the `#` character alone** leaves valid,
+correctly indented YAML, because the `#` sits in a column that would otherwise
+be indentation. Do not delete the space after it as well: that shifts the line
+out of alignment and MediaMTX will refuse to start.
+
+Three settings are the exception: `webrtcICEServers2`, `alwaysAvailableTracks`
+and `forward`. MediaMTX rejects an empty value for these, so they ship as
+`[]` and their examples cannot be switched on in place. Replace the `[]` line
+with the commented block that follows it, uncommented.
+
 ## Recording storage
 
 Recording is disabled by default, and **`recordPath` is deliberately left unset**
@@ -121,8 +134,9 @@ before you enable recording.
 | Camera with an SD card | `SD_DISK` | `/var/spool/storage/areas/SD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f` |
 | Recorder with an internal disk (AXIS S30 series and similar) | `HDD_DISK` | `/var/spool/storage/areas/HDD_DISK/root/MediaMTX/recordings/%path/%Y-%m-%d_%H-%M-%S-%f` |
 
-Both lines are present, commented out, in the bundled configuration: uncomment
-the one that matches your device. If neither does, the app's **Show log** view
+Both lines are present, commented out, in the bundled configuration: delete the
+`#` character from the one that matches your device. The example indentation is
+already valid when uncommented this way. If neither does, the app's **Show log** view
 and the device shell both list the mounted areas under
 `/var/spool/storage/areas/`.
 
@@ -167,6 +181,16 @@ paths:
 
 makes the stream available at `rtsp://IPAddress:8554/proxied` with no
 authentication.
+
+### RTSP source transport
+
+The bundled configuration sets `rtspTransport: tcp` for pulled RTSP sources,
+where MediaMTX itself defaults to `automatic` (which prefers UDP). A camera
+pulling its own sensor over `127.0.0.1` loses RTP packets over UDP, which
+corrupts the H.264 stream and restarts the recorder every few seconds, leaving
+recordings in short fragments. UDP does not fail outright in that situation, so
+the automatic fallback to TCP never happens. Set it back to `automatic` if you
+have a source that does not support TCP.
 
 ## Viewing recordings
 
