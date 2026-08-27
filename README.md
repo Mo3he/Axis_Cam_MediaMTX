@@ -109,6 +109,34 @@ page provides a full editor for `mediamtx.yml`:
 The editor is admin-access only and authenticates against the device user pool,
 the same as VAPIX.
 
+### Changes made through the MediaMTX Control API are not saved
+
+MediaMTX's own Control API on port `9997` (`/v3/config/global/patch`,
+`/v3/config/paths/add/...` and similar) applies changes to the **running**
+server only. MediaMTX never writes them back to `mediamtx.yml`, so they are
+lost the next time the server restarts or the camera reboots. This is upstream
+MediaMTX behaviour, not a limitation of this package.
+
+Use the settings page, or its `config.cgi` endpoint, for any change that has to
+survive a restart:
+
+```sh
+# read the current configuration
+curl -k --anyauth -u USER:PASS \
+  "https://<device ip>/local/MediaMTX/config.cgi" > mediamtx.yml
+
+# edit mediamtx.yml, then write it back
+curl -k --anyauth -u USER:PASS -X POST --data-binary @mediamtx.yml \
+  "https://<device ip>/local/MediaMTX/config.cgi"
+
+# apply it
+curl -k --anyauth -u USER:PASS -X POST \
+  "https://<device ip>/local/MediaMTX/config.cgi?action=restart"
+```
+
+The Control API remains useful for inspecting state and for temporary runtime
+changes; just treat anything set there as volatile.
+
 ### Enabling a commented-out example
 
 The bundled configuration contains ready-made examples that are commented out.
@@ -260,6 +288,10 @@ camera does not open those ports unless you ask it to. Set `rtmp`, `srt` or
 > pages: if you do not need those pages, set `api: no`. The playback server is
 > bound to localhost and is reached only through the authenticated `config.cgi`
 > proxy.
+
+Note that configuration changes made through the control API are not written to
+`mediamtx.yml`: see
+[Changes made through the MediaMTX Control API are not saved](#changes-made-through-the-mediamtx-control-api-are-not-saved).
 
 ## Build from source
 
