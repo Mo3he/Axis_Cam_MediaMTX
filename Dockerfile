@@ -11,7 +11,7 @@ ARG REPO=axisecp
 ARG SDK=acap-native-sdk
 # Keep in step with app/manifest.json: CI rewrites this via apply-version.sh, but
 # a local build uses this value, and an older mediamtx rejects newer config keys.
-ARG MEDIAMTX_VERSION=1.21.0
+ARG MEDIAMTX_VERSION=1.21.1
 # Upstream MediaMTX release architecture; derived from ARCH when left empty.
 ARG MEDIAMTX_ARCH=
 
