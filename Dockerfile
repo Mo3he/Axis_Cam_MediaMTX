@@ -16,7 +16,7 @@ ARG MEDIAMTX_VERSION=1.21.1
 ARG MEDIAMTX_ARCH=
 
 # --- Stage 1: download and verify the MediaMTX release binary ---
-FROM ubuntu:24.04 AS fetch
+FROM ubuntu:26.04 AS fetch
 ARG ARCH
 ARG MEDIAMTX_VERSION
 ARG MEDIAMTX_ARCH
