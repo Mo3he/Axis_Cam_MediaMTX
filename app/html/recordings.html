@@ -356,12 +356,8 @@
     }
 
     // ----- Playback -------------------------------------------------------
-    // MediaMTX records fragmented MP4 with an "empty moov" (no duration in the
-    // header) and no trailing index, so a native <video src> has to download
-    // the whole file (up to ~1 GB) before it can start or seek. Instead we play
-    // through Media Source Extensions: the server's action=fragidx gives the
-    // init-segment size, duration, codec and a keyframe index, and we append
-    // only the bytes currently needed, evicting old data to stay within quota.
+    // MediaMTX's "empty moov" fMP4 has no duration or index, so <video src> must fetch the
+    // whole file first. Play via MSE instead, appending only what action=fragidx says is needed.
 
     const MSE_CHUNK  = 1 << 20; // 1 MiB fetch granularity
     const MSE_AHEAD  = 25;      // seconds of buffer to keep ahead of playhead
@@ -510,8 +506,8 @@
         try {
           while (!s.stopped && s.seekToken === gen) {
             const ct = player.currentTime;
-            if (bufferedEndAt(s.sb, ct) - ct > MSE_AHEAD) break; // enough ahead
-            if (s.fetchOff >= s.idx.size) {                       // reached EOF
+            if (bufferedEndAt(s.sb, ct) - ct > MSE_AHEAD) break;
+            if (s.fetchOff >= s.idx.size) {
               try { if (s.ms.readyState === 'open') s.ms.endOfStream(); } catch (e) {}
               break;
             }
@@ -555,7 +551,7 @@
       const t = player.currentTime;
       if (isBuffered(s.sb, t)) { pumpMse(s); return; }
       const token = ++s.seekToken;
-      s.abort();                       // cancel any in-flight fetch
+      s.abort();
       try { await s.pumpPromise; } catch (e) {} // let the pump fully stop
       try { await s.opChain; } catch (e) {}
       if (s.stopped || token !== s.seekToken) return;
@@ -578,11 +574,8 @@
     }
 
     // ----- VMS timeline ----------------------------------------------------
-    // Time-based view of the recordings: the recorded timespans come from the
-    // MediaMTX playback server (proxied by config.cgi as action=timeline), and
-    // clicking a moment plays footage extracted by time (action=clip), stitched
-    // across segment files by the playback server. Dragging selects a range
-    // that can be played or exported as a standard MP4.
+    // Spans come from the playback server's /list (action=timeline); playback and
+    // export use action=clip, which the playback server stitches across segments.
 
     const tlStreamSel = document.getElementById('tlStream');
     const tlDate = document.getElementById('tlDate');

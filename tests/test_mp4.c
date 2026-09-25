@@ -1,11 +1,6 @@
 /*
- * Host-side unit tests for the pure parsing code in app/config.c: the MP4
- * box walker used by the MSE fragment index, URL/query helpers, and the
- * same-origin CSRF guard.
- *
- * config.c is included directly (with its main() renamed) so its static
- * functions are testable without changing the production layout. Build with
- * the stub FastCGI header:
+ * Host-side unit tests for the parsing helpers in app/config.c, which is
+ * included directly (main() renamed) so its static functions are testable.
  *
  *   cc -Wall -Wextra -Werror -Itests/fcgi_stub tests/test_mp4.c -o tests/test_mp4
  *   ./tests/test_mp4
@@ -456,15 +451,14 @@ static int test_is_recording_name(void) {
     /* a bare extension is not a segment */
     CHECK(is_recording_name(".mp4") == 0);
     CHECK(is_recording_name(".ts") == 0);
-    /* .mp4 must not be matched by the .ts suffix test */
+    /* ".mts" must not be matched by the .ts suffix test */
     CHECK(is_recording_name("clip.mts") == 0);
 
     return 0;
 }
 
 static int test_get_record_base_unset(void) {
-    /* CONF_FILE does not exist on the host, so this exercises the no-config
-     * case: the old build substituted a hardcoded tmpfs path here. */
+    /* CONF_FILE does not exist on the host, so this exercises the no-config case. */
     char base[PATH_MAX];
     get_record_base(base, sizeof(base));
     CHECK(base[0] == '\0');

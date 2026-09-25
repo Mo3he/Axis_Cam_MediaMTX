@@ -1,30 +1,23 @@
 /*
- * MediaMTX ACAP configuration backend (FastCGI).
+ * MediaMTX ACAP configuration backend (FastCGI) at /local/MediaMTX/config.cgi (admin only).
  *
- * Exposed by the device web server at /local/MediaMTX/config.cgi (admin only).
- *
- *   GET  config.cgi                   -> return current mediamtx.yml (text/plain)
- *   GET  config.cgi?action=defaults   -> return bundled mediamtx.defaults.yml
- *   GET  config.cgi?action=backup     -> return previous mediamtx.yml (pre-save)
+ *   GET  config.cgi                   -> current mediamtx.yml
+ *   GET  config.cgi?action=defaults   -> bundled mediamtx.defaults.yml
+ *   GET  config.cgi?action=backup     -> previous mediamtx.yml (pre-save)
  *   GET  config.cgi?action=status     -> JSON: MediaMTX running / crash count
  *   GET  config.cgi?action=storage    -> JSON: recordings disk usage
  *   GET  config.cgi?action=recordings -> JSON list of recorded segments
  *   GET  config.cgi?action=streams    -> JSON list of recorded stream names
  *   GET  config.cgi?action=fragidx&file=<rel>   -> fragment index for MSE
  *   GET  config.cgi?action=recording&file=<rel> -> stream a recording (Range)
- *   GET  config.cgi?action=timeline&path=<name>[&start=..&end=..]
- *                                     -> recorded timespans (proxies the
- *                                        MediaMTX playback server's /list)
+ *   GET  config.cgi?action=timeline&path=<name>[&start=..&end=..] -> proxies playback /list
  *   GET  config.cgi?action=clip&path=<name>&start=<RFC3339>&duration=<secs>
- *                   [&format=fmp4|mp4][&download=1]
- *                                     -> extract footage by time (proxies /get)
+ *        [&format=fmp4|mp4][&download=1] -> proxies playback /get
  *   POST config.cgi                   -> overwrite mediamtx.yml with request body
  *   POST config.cgi?action=restart    -> restart the MediaMTX process
  *   POST config.cgi?action=delete&file=<rel>    -> delete a recording
  *
- * Requests are served by a small pool of threads: clip playback keeps a
- * connection busy for as long as the viewer watches, and must not block the
- * status/timeline requests the recordings page issues meanwhile.
+ * Served by a thread pool so a long-running clip stream cannot block status/timeline polls.
  */
 
 #define _FILE_OFFSET_BITS 64
@@ -91,12 +84,9 @@ static void send_json(FCGX_Request* r, const char* status, const char* json) {
                  json);
 }
 
-/* CSRF guard for state-changing requests. The device authenticates with
- * ambient credentials (Basic/Digest), which browsers attach to cross-origin
- * form posts too, so a malicious page visited by a logged-in admin could
- * otherwise rewrite the config. Browsers always send Origin (or at least
- * Referer) on POST; when one is present it must match the Host we were
- * reached on. Requests with neither header (curl, scripts) pass. */
+/* CSRF guard: browsers attach the ambient Basic/Digest credentials to cross-origin
+ * posts too. When Origin or Referer is present it must match Host; requests with
+ * neither (curl, scripts) pass. */
 static int same_origin(FCGX_Request* r) {
     const char* host = FCGX_GetParam("HTTP_HOST", r->envp);
     if (!host || !*host)
@@ -114,11 +104,8 @@ static int same_origin(FCGX_Request* r) {
     return p[hl] == '\0' || p[hl] == '/';
 }
 
-/* Clear the supervisor's consecutive-failure counter. A deliberate restart
- * means the admin is applying a (possibly fixed) config, so past crash history
- * is no longer relevant and the web UI should judge the new config fresh. The
- * supervisor re-reads this file at the top of each loop, so the reset sticks
- * even when it is currently backing off from a crash-loop. */
+/* A deliberate restart applies a (possibly fixed) config, so clear the crash history.
+ * The supervisor re-reads this file each loop, so it sticks even mid-backoff. */
 static void reset_failcount(void) {
     FILE* f = fopen(FAILS_FILE, "w");
     if (f) {
@@ -127,8 +114,7 @@ static void reset_failcount(void) {
     }
 }
 
-/* Restart MediaMTX by signaling the pid written by the startup script.
- * The supervising loop in the startup script relaunches it. */
+/* SIGTERM the pid the startup script recorded; its supervisor loop relaunches MediaMTX. */
 static int restart_mediamtx(void) {
     FILE* f = fopen(PID_FILE, "r");
     if (!f)
@@ -140,9 +126,8 @@ static int restart_mediamtx(void) {
         return -1;
     reset_failcount();
     if (kill((pid_t)pid, SIGTERM) != 0) {
-        /* ESRCH: MediaMTX has already exited (e.g. crash-looping and currently
-         * in the supervisor's backoff sleep). The supervisor will relaunch the
-         * current config on its next cycle, so the restart is still honored. */
+        /* ESRCH: already exited (e.g. in the supervisor's backoff sleep); the
+         * supervisor relaunches the current config anyway. */
         if (errno == ESRCH)
             return 0;
         syslog(LOG_ERR, "failed to signal pid %ld: %s", pid, strerror(errno));
@@ -151,9 +136,7 @@ static int restart_mediamtx(void) {
     return 0;
 }
 
-/* Keep a copy of the current config so a bad save can be recovered from the
- * web UI (GET action=backup). Best effort: a failed backup never blocks the
- * save itself. */
+/* Best effort copy for recovering a bad save via action=backup; never blocks the save. */
 static void backup_config(void) {
     FILE* in = fopen(CONF_FILE, "rb");
     if (!in)
@@ -172,9 +155,7 @@ static void backup_config(void) {
     fclose(out);
 }
 
-/* Stream the POST body to a temp file then atomically replace mediamtx.yml.
- * The temp file name carries the worker thread id so concurrent saves cannot
- * interleave into the same file. */
+/* Atomic replace via a per-thread temp file so concurrent saves cannot interleave. */
 static int save_config(FCGX_Request* r, int tid) {
     const char* cl = FCGX_GetParam("CONTENT_LENGTH", r->envp);
     long remaining  = cl ? atol(cl) : -1;
@@ -224,11 +205,8 @@ static int save_config(FCGX_Request* r, int tid) {
     return 0;
 }
 
-/* Determine the base directory where recordings are stored by reading the
- * recordPath setting from mediamtx.yml and truncating at the first placeholder
- * (%path / strftime). Leaves out empty when recordPath is not set: there is no
- * safe default, because the correct storage area is named after the disk and
- * differs between cameras and recorders. */
+/* recordPath up to its first '%' placeholder. Empty when unset: there is no safe
+ * default, since the storage area is named after the disk and varies by device. */
 static void get_record_base(char* out, size_t outsz) {
     out[0] = '\0';
     FILE* f = fopen(CONF_FILE, "r");
@@ -300,9 +278,8 @@ static int truthy(const char* v) {
            strcasecmp(v, "off") != 0 && strcmp(v, "0") != 0;
 }
 
-/* Port of the MediaMTX playback server per mediamtx.yml, or -1 when the
- * server is disabled (the upstream default). The proxy always connects to
- * 127.0.0.1 regardless of the configured bind address. */
+/* Playback server port, or -1 when disabled (the upstream default). The proxy
+ * always connects to 127.0.0.1 regardless of the configured bind address. */
 static int playback_port(void) {
     char v[256];
     conf_scalar("playback", v, sizeof(v));
@@ -316,10 +293,7 @@ static int playback_port(void) {
     return (int)port;
 }
 
-/* Report whether MediaMTX is running and how often it has crashed recently.
- * The pid comes from the file the supervisor writes; the consecutive-failure
- * count is maintained by the supervisor loop in the startup script. The web
- * UI polls this after a restart to detect a config that crash-loops. */
+/* The web UI polls this after a restart to detect a crash-looping config. */
 static void send_status(FCGX_Request* r) {
     long  pid = 0;
     FILE* f   = fopen(PID_FILE, "r");
@@ -388,22 +362,9 @@ static void json_puts_escaped(FCGX_Stream* out, const char* s) {
     }
 }
 
-/*
- * Minimal MP4 duration probe.
- *
- * Computes a recording's length on the device so the web UI does not have to
- * download and parse each file in the browser. Handles both plain MP4 (mvhd /
- * mdhd duration) and the fragmented MP4 that MediaMTX records (sum of fragment
- * sample durations via moof/traf/tfdt/trun). Only box headers and the small
- * moov/moof boxes are read; the large mdat payloads are skipped with a seek.
- *
- * MediaMTX writes the moov up front but leaves the mvhd/tkhd/mdhd duration
- * fields at zero (it is an "empty moov" with no mehd). A browser <video> then
- * has to download the whole file to discover the length before it can start,
- * so large recordings appear to never play. mp4_probe() therefore also records
- * the byte offsets of those duration fields so the streamer can patch in the
- * real value (which has the same width, so no offsets shift) on the fly.
- */
+/* Minimal MP4 box parser for action=fragidx: reads moov/moof, seeks past mdat.
+ * MediaMTX leaves the mvhd/tkhd/mdhd durations at zero ("empty moov"), so
+ * fragmented files are timed from their fragments. */
 
 #define MP4_MAX_TRACKS 8
 #define MP4_MAX_BOX    (16u * 1024 * 1024)
@@ -559,22 +520,12 @@ static void mp4_parse_moov(const unsigned char* base, const unsigned char* body,
 }
 
 /*
- * Fragment index for Media Source Extensions playback.
- *
- * MediaMTX records "empty moov" fragmented MP4 with no duration in the header
- * and no trailing mfra index, so a browser <video src> has to download the
- * entire file (up to ~1 GB) just to learn the length and build a seek index
- * before it can start. The web UI therefore plays via MSE: it appends the
- * small init segment (ftyp+moov) plus only the fragments it currently needs.
- *
- * action=fragidx returns the data MSE needs without scanning the file in the
- * browser:
+ * Fragment index for MSE playback. Without a header duration or mfra index a
+ * <video src> must download the whole file before starting, so the UI appends
+ * the init segment plus only the fragments it needs, using:
  *   {"ok":true,"duration":<s>,"size":<bytes>,"init":<bytes>,
  *    "codecs":"avc1.640032","frags":[[<t>,<byteOffset>],...]}
- * where "init" is the byte length of the init segment (offset of the first
- * moof) and "frags" lists keyframe (sync-sample) fragments as
- * [timeSeconds, fileByteOffset] so the client can seek by jumping straight to
- * the right fragment. Only box headers and the small moov/moof boxes are read.
+ * "init" is the offset of the first moof; "frags" lists keyframe fragments.
  */
 
 /* Build an MSE codecs string (e.g. "avc1.640032" or "avc1.640032,mp4a.40.2")
@@ -946,10 +897,8 @@ static void list_recordings(FCGX_Request* r, const char* base, const char* rel,
     closedir(d);
 }
 
-/* Emit JSON strings for every directory under base that directly contains
- * recorded segments; with the default recordPath layout those are exactly the
- * stream path names the recorder writes (%path may itself contain slashes,
- * hence the recursion). */
+/* Directories that directly contain segments are the stream names under the
+ * default recordPath layout; recursive because %path may contain slashes. */
 static void streams_walk(FCGX_Request* r, const char* base, const char* rel,
                          int depth, int* first) {
     if (depth > 8)
@@ -1122,15 +1071,8 @@ static int playback_connect(int port) {
     return fd;
 }
 
-/*
- * Proxy one request to the MediaMTX playback server on localhost and stream
- * the response back. This keeps the playback server unexposed (it is bound to
- * 127.0.0.1), reuses the device's admin authentication, and avoids the CORS
- * and mixed-content problems of pointing the browser at another port.
- *
- * The request is sent as HTTP/1.0 so the response is never chunk-encoded (the
- * device web server applies its own framing); the body simply ends at EOF.
- */
+/* Proxying keeps the playback server off the network, reuses the device's admin
+ * auth and avoids CORS/mixed content. HTTP/1.0 so the response is never chunked. */
 static void proxy_playback(FCGX_Request* r, const char* upath,
                            const char* query, const char* dlname) {
     int port = playback_port();
@@ -1307,11 +1249,8 @@ static void handle_clip(FCGX_Request* r, const char* query) {
     proxy_playback(r, "/get", q, dl);
 }
 
-/* Stream a single recording file, honouring an optional HTTP Range request so
- * the browser can seek. The web UI plays via MSE (action=fragidx), which
- * issues many small Range requests, so this path stays a plain byte server
- * with no per-request parsing. The path is confined to the recordings base
- * directory via realpath() to prevent traversal. */
+/* Plain Range byte server: MSE issues many small Range requests, so no per-request
+ * parsing. resolve_recording() confines the path to the recordings base (realpath). */
 static void send_recording(FCGX_Request* r, const char* base, const char* file) {
     char realfull[PATH_MAX];
     if (resolve_recording(r, base, file, realfull) != 0)
@@ -1383,9 +1322,6 @@ static void send_recording(FCGX_Request* r, const char* base, const char* file) 
                      ctype, length);
     }
 
-    /* MediaMTX records an "empty moov" (zero duration in the header), but the
-     * web UI plays via MSE and gets the real duration from action=fragidx, so
-     * this path just streams the requested byte range verbatim. */
     if (fseeko(f, (off_t)start, SEEK_SET) != 0) {
         fclose(f);
         return;
@@ -1404,8 +1340,7 @@ static void send_recording(FCGX_Request* r, const char* base, const char* file) 
     fclose(f);
 }
 
-/* Delete a single recording. The path is confined to the recordings base
- * directory by resolve_recording(), same as playback. */
+/* resolve_recording() confines the path to the recordings base, same as playback. */
 static void delete_recording(FCGX_Request* r, const char* base, const char* file) {
     char realfull[PATH_MAX];
     if (resolve_recording(r, base, file, realfull) != 0)
@@ -1539,9 +1474,7 @@ static void* request_loop(void* arg) {
 int main(void) {
     openlog("mediamtx_config", LOG_PID, LOG_USER);
 
-    /* A disconnected client (the MSE player aborts range fetches on every
-     * seek) must not raise SIGPIPE and kill the worker; writes then fail
-     * cleanly and the streaming loops stop via the FCGX_PutStr error check. */
+    /* The MSE player aborts range fetches on every seek; that must not SIGPIPE a worker. */
     signal(SIGPIPE, SIG_IGN);
 
     const char* socket_path = getenv("FCGI_SOCKET_NAME");

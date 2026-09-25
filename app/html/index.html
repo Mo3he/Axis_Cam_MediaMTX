@@ -249,8 +249,7 @@
       buttons.forEach(b => b.disabled = on);
     }
 
-    // source: '' = current config, 'defaults' or 'backup' = alternate copies
-    // loaded into the editor without saving.
+    // source: '' = current config; 'defaults'/'backup' load into the editor unsaved.
     async function load(source) {
       busy(true);
       setStatus(source ? 'Loading ' + source + '...' : 'Loading...');
@@ -355,8 +354,7 @@
       if (open) refreshLog();
     };
 
-    // Editor wiring: re-highlight on edit, keep overlay aligned on scroll,
-    // and insert spaces for Tab so YAML indentation stays intact.
+    // Tab inserts spaces so YAML indentation stays intact.
     editor.addEventListener('input', render);
     editor.addEventListener('scroll', syncScroll);
     editor.addEventListener('keydown', (e) => {

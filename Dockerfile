@@ -1,5 +1,4 @@
-# Global build arguments (must be declared before the first FROM to be usable in
-# the second stage's FROM line).
+# Declared before the first FROM so the second stage's FROM line can use them.
 #
 # Build either architecture from this single Dockerfile:
 #   docker build --build-arg ARCH=aarch64 --tag mediamtx-aarch64 .
@@ -44,7 +43,6 @@ RUN set -eux; \
 # --- Stage 2: build the ACAP application ---
 FROM ${REPO}/${SDK}:${VERSION}-${ARCH}-ubuntu${UBUNTU_VERSION}
 
-# Bring in the verified MediaMTX binary downloaded in the fetch stage.
 COPY ./app /opt/app/
 COPY --from=fetch /dl/mediamtx /opt/app/lib/mediamtx
 WORKDIR /opt/app

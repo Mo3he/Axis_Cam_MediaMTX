@@ -124,10 +124,8 @@
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
 
-    // Minimal reading of mediamtx.yml: top-level scalar settings plus the
-    // names directly under "paths:". Good enough for a plain (non-anchored,
-    // non-flow) config, which is what the bundled default and the editor
-    // produce.
+    // Minimal mediamtx.yml reader (top-level scalars + names under "paths:"); enough
+    // for the plain block-style config the bundled default and the editor produce.
     function parseConfig(text) {
       const cfg = { settings: {}, paths: [] };
       const lines = text.split('\n');

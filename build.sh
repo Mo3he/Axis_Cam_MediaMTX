@@ -3,15 +3,14 @@ set -eu
 
 REPO_ROOT=$(cd -P "$(dirname "$0")" && pwd)
 
-# Auto-detect container runtime.
-# Prefer docker when the daemon is reachable; fall back to podman.
+# Prefer docker only when its daemon is reachable, else podman.
 if [ -z "${RUNTIME:-}" ]; then
 	if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 		RUNTIME=docker
 	elif command -v podman >/dev/null 2>&1; then
 		RUNTIME=podman
 	elif command -v docker >/dev/null 2>&1; then
-		# docker exists but daemon not running — let it fail with a clear error
+		# daemon not running: let docker fail with a clear error
 		RUNTIME=docker
 	else
 		echo 'Error: neither docker nor podman found in PATH' >&2
@@ -20,20 +19,15 @@ if [ -z "${RUNTIME:-}" ]; then
 fi
 echo "==> Using container runtime: ${RUNTIME}"
 
-# Optional: override the bundled MediaMTX release (without the leading 'v').
-# Leave unset to use the default pinned in the Dockerfile.
+# Optional MediaMTX release override (no leading 'v'); unset uses the Dockerfile pin.
 MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-}"
 
-# Remove any previously built .eap files so only the current build remains.
 echo '==> Cleaning old .eap files...'
 rm -f "${REPO_ROOT}"/*.eap
 rm -rf "${REPO_ROOT}/debug"
 
-# build_arch <arch>
-# Builds the image for one architecture, then copies the generated .eap
-# (produced under /opt/app inside the image) out via a temporary container.
-# The full SDK image is the final stage, so BuildKit --output cannot be used
-# to extract a single file the way the netstack ACAPs do.
+# The SDK image is the final stage, so BuildKit --output cannot extract just the
+# .eap; copy it out of a temporary container instead.
 build_arch() {
 	ARCH=$1
 	echo "==> Building .eap package for ${ARCH}..."
@@ -52,7 +46,6 @@ build_arch() {
 	mkdir -p "$REPO_ROOT/debug"
 	"$RUNTIME" cp "${CID}":/opt/debug/mediamtx.unstripped \
 		"$REPO_ROOT/debug/mediamtx-${ARCH}.unstripped"
-	# Move only the freshly built .eap package(s) to the repo root.
 	for eap in "$TMP"/*.eap; do
 		[ -e "$eap" ] || continue
 		mv "$eap" "$REPO_ROOT/"
@@ -62,8 +55,6 @@ build_arch() {
 	"$RUNTIME" rmi -f "$TAG" >/dev/null 2>&1 || true
 }
 
-# Build architectures sequentially: both share the same TAG namespace and
-# copy through /opt/app, so serial builds keep the output unambiguous.
 for ARCH in aarch64 armv7hf; do
 	build_arch "$ARCH"
 done
