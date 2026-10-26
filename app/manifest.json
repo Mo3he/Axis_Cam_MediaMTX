@@ -22,7 +22,7 @@
         }
       ],
       "runMode": "respawn",
-      "version": "1.21.2"
+      "version": "1.21.3"
     },
     "configuration": {
       "settingPage": "index.html",
