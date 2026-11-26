@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MediaMTX Media Server for Axis Cameras</title>
+  <meta name="description" content="Run the MediaMTX media server on your Axis camera: watch in any browser with WebRTC or HLS, share RTSP with other software, and record to the SD card with a scrubbable timeline and MP4 export.">
+  <link rel="canonical" href="https://mo3he.github.io/Axis_Cam_MediaMTX/">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://mo3he.github.io/Axis_Cam_MediaMTX/">
+  <meta property="og:title" content="MediaMTX Media Server for Axis Cameras">
+  <meta property="og:description" content="Run the MediaMTX media server on your Axis camera: watch in any browser with WebRTC or HLS, share RTSP with other software, and record to the SD card with a scrubbable timeline and MP4 export.">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="MediaMTX Media Server for Axis Cameras">
+  <meta name="twitter:description" content="Run the MediaMTX media server on your Axis camera: watch in any browser with WebRTC or HLS, share RTSP with other software, and record to the SD card with a scrubbable timeline and MP4 export.">
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #181b23;
+      --surface-2: #1f232d;
+      --border: #262a35;
+      --text: #e4e6ed;
+      --muted: #8b8fa3;
+      --accent: #4f8ff7;
+      --accent-hover: #6ba1ff;
+      --accent-soft: rgba(79, 143, 247, 0.12);
+      --accent-line: rgba(79, 143, 247, 0.25);
+      --amber: #f59e0b;
+      --radius: 12px;
+    }
+    [data-theme="light"] {
+      --bg: #f8f9fb;
+      --surface: #ffffff;
+      --surface-2: #f1f3f7;
+      --border: #e0e3e8;
+      --text: #1a1d27;
+      --muted: #5f6577;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --accent-soft: rgba(37, 99, 235, 0.08);
+      --accent-line: rgba(37, 99, 235, 0.25);
+      --amber: #b45309;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hover); }
+    a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88em; background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 0.05em 0.35em; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 0 2rem; }
+    section { padding: 3.5rem 0; }
+    .section-head { text-align: center; max-width: 680px; margin: 0 auto 2.25rem; }
+    .section-head h2 { font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; margin-bottom: 0.5rem; }
+    .section-head p { color: var(--muted); font-size: 1.05rem; }
+    .eyebrow { display: block; color: var(--accent); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.5rem; }
+    /* Nav */
+    nav { display: flex; justify-content: space-between; align-items: center; max-width: 1100px; margin: 0 auto; padding: 1.5rem 2rem; gap: 1rem; }
+    nav .logo { font-size: 1.2rem; font-weight: 700; color: var(--text); }
+    nav .logo small { display: block; font-size: 0.75rem; font-weight: 500; color: var(--muted); }
+    nav .logo small a { color: inherit; }
+    nav .logo small a:hover { color: var(--text); }
+    nav .links { display: flex; gap: 1.5rem; align-items: center; }
+    nav .links a { color: var(--muted); font-size: 0.95rem; }
+    nav .links a:hover { color: var(--text); }
+    nav .links a.sponsor { color: #db61a2; }
+    .theme-toggle { background: none; border: 1px solid var(--border); color: var(--muted); cursor: pointer; border-radius: 8px; padding: 0.4rem; display: flex; align-items: center; justify-content: center; transition: all 0.2s; width: 34px; height: 34px; }
+    .theme-toggle:hover { border-color: var(--muted); color: var(--text); }
+    .theme-toggle svg { width: 18px; height: 18px; }
+    /* Hero */
+    .hero { text-align: center; padding: 4.5rem 2rem 3rem; max-width: 820px; margin: 0 auto; }
+    .badge { display: inline-block; background: var(--accent-soft); color: var(--accent); padding: 0.35rem 1rem; border-radius: 20px; font-size: 0.85rem; font-weight: 600; margin-bottom: 1.5rem; border: 1px solid var(--accent-line); }
+    .badge.beta { background: rgba(245, 158, 11, 0.12); color: var(--amber); border-color: rgba(245, 158, 11, 0.3); }
+    .hero h1 { font-size: 3rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; margin-bottom: 1.25rem; }
+    .hero h1 span { color: var(--accent); }
+    .hero p { font-size: 1.2rem; color: var(--muted); max-width: 640px; margin: 0 auto 2rem; }
+    .hero-buttons { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.95rem; font-weight: 600; transition: all 0.2s; }
+    .btn svg { width: 18px; height: 18px; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); color: #fff; }
+    .btn-outline { border: 1px solid var(--border); color: var(--text); background: transparent; }
+    .btn-outline:hover { border-color: var(--muted); color: var(--text); }
+    .disclaimer { max-width: 720px; margin: 0 auto; padding: 0 1.5rem; }
+    .disclaimer div { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 10px; padding: 12px 18px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+    .disclaimer strong { color: var(--text); }
+    /* Story cards */
+    .story-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
+    .story { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.75rem; }
+    .story .q { font-size: 1.1rem; font-weight: 700; line-height: 1.35; margin-bottom: 0.6rem; }
+    .story .q::before { content: "\201C"; color: var(--accent); margin-right: 0.1rem; }
+    .story .q::after { content: "\201D"; color: var(--accent); margin-left: 0.05rem; }
+    .story p { color: var(--muted); font-size: 0.95rem; }
+    /* Flow diagram */
+    .flow { display: grid; grid-template-columns: 1fr auto 1.15fr auto 1fr; align-items: stretch; gap: 0.75rem; }
+    .flow-col { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; }
+    .flow-col.core { border: 2px solid var(--accent); background: linear-gradient(180deg, var(--accent-soft), transparent 70%), var(--surface); }
+    .flow-col h3 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+    .flow-col.core h3 { color: var(--accent); }
+    .node { display: flex; gap: 0.7rem; align-items: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 0.65rem 0.8rem; }
+    .node .i { font-size: 1.25rem; line-height: 1.3; }
+    .node strong { display: block; font-size: 0.93rem; line-height: 1.35; }
+    .node span { display: block; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
+    .flow-link { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.35rem; color: var(--accent); min-width: 72px; }
+    .flow-link .arrow { font-size: 1.6rem; line-height: 1; }
+    .flow-link .arrow::before { content: "\2192"; }
+    .flow-link small { color: var(--muted); font-size: 0.75rem; text-align: center; max-width: 9rem; line-height: 1.35; }
+    .flow-note { text-align: center; color: var(--muted); font-size: 0.9rem; margin: 1.25rem auto 0; max-width: 760px; }
+    /* Preview */
+    .preview-tabs { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1rem; }
+    .preview-tabs button { font: inherit; font-size: 0.9rem; font-weight: 600; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 20px; padding: 0.4rem 1rem; cursor: pointer; }
+    .preview-tabs button:hover { color: var(--text); border-color: var(--muted); }
+    .preview-tabs button[aria-selected="true"] { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+    .browser { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.55); }
+    .browser-bar { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+    .dots { display: flex; gap: 6px; }
+    .dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); display: block; }
+    .url { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.25rem 0.6rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sample { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--amber); background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 0.15rem 0.5rem; white-space: nowrap; }
+    .browser iframe { display: block; width: 100%; border: 0; background: #fff; }
+    .preview-foot { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; color: var(--muted); font-size: 0.85rem; margin-top: 0.9rem; }
+    /* Features */
+    .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.25rem; }
+    .feature-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.75rem; }
+    .feature-card .icon { font-size: 1.6rem; margin-bottom: 0.75rem; }
+    .feature-card h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .feature-card p { color: var(--muted); font-size: 0.92rem; line-height: 1.55; }
+    /* Download */
+    .download-card { max-width: 720px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.75rem; }
+    .download-card .row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .download-card h3 { font-size: 1.1rem; font-weight: 700; }
+    .version { font-size: 0.85rem; color: var(--muted); }
+    .arch-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+    .arch-btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; border: 1px solid var(--border); color: var(--text); background: transparent; transition: all 0.2s; }
+    .arch-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .arch-btn svg { width: 16px; height: 16px; }
+    .compat { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .compat th, .compat td { text-align: left; padding: 0.55rem 0.4rem; border-top: 1px solid var(--border); vertical-align: top; }
+    .compat th { color: var(--muted); font-weight: 600; width: 34%; }
+    .arch-help { color: var(--muted); font-size: 0.85rem; margin-top: 1rem; }
+    .arch-help strong { color: var(--text); }
+    /* Install */
+    .steps { max-width: 700px; margin: 0 auto; display: flex; flex-direction: column; gap: 1rem; }
+    .step { display: flex; gap: 1rem; align-items: flex-start; }
+    .step-num { min-width: 36px; height: 36px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; border: 1px solid var(--accent-line); }
+    .step-text { padding-top: 0.35rem; }
+    .step-text strong { display: block; margin-bottom: 0.15rem; }
+    .step-text span { color: var(--muted); font-size: 0.92rem; }
+    .step-text span strong { display: inline; color: var(--text); margin: 0; }
+    /* FAQ */
+    .faq { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 0.75rem; }
+    .faq details { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1.2rem; }
+    .faq summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 1rem; }
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::after { content: "+"; color: var(--accent); font-weight: 700; }
+    .faq details[open] summary::after { content: "\2212"; }
+    .faq details p { color: var(--muted); font-size: 0.93rem; margin-top: 0.6rem; }
+    /* Footer */
+    footer { border-top: 1px solid var(--border); text-align: center; padding: 2rem; color: var(--muted); font-size: 0.85rem; max-width: 1100px; margin: 2rem auto 0; }
+    footer .footer-links { display: flex; gap: 1.5rem; justify-content: center; flex-wrap: wrap; margin-bottom: 0.75rem; }
+    footer .fine { font-size: 0.75rem; opacity: 0.7; margin-top: 0.5rem; }
+    @media (max-width: 900px) {
+      .flow { grid-template-columns: 1fr; }
+      .flow-link { flex-direction: row; min-width: 0; padding: 0.15rem 0; }
+      .flow-link .arrow::before { content: "\2193"; }
+      .flow-link small { max-width: none; }
+    }
+    @media (max-width: 760px) {
+      nav { padding: 1rem 1.25rem; flex-wrap: wrap; }
+      nav .links { gap: 1rem; flex-wrap: wrap; }
+      nav .links .opt { display: none; }
+    }
+    @media (max-width: 640px) {
+      .wrap { padding: 0 1.25rem; }
+      section { padding: 2.5rem 0; }
+      .hero h1 { font-size: 2.1rem; }
+      .hero { padding: 3rem 1.25rem 2rem; }
+      .hero p { font-size: 1.05rem; }
+      .hero-buttons { flex-direction: column; align-items: center; }
+      .section-head h2 { font-size: 1.6rem; }
+      .dots { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="logo">MediaMTX + Axis<small><a href="https://mo3he.github.io/">Part of Mo3he's Axis camera projects</a></small></div>
+    <div class="links">
+      <a href="#how" class="opt">How it works</a>
+      <a href="#preview">Try it</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/Mo3he/Axis_Cam_MediaMTX" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/sponsors/Mo3he" target="_blank" rel="noopener" class="sponsor opt">Sponsor</a>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark theme">
+        <svg id="iconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg id="iconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="badge">Open Source &middot; ACAP for Axis cameras</div>
+    <h1>Turn your Axis camera into a <span>media server</span></h1>
+    <p>Watch the camera in any browser, share its stream with the software you already use, and record to the SD card with a timeline you can scrub. All from the camera itself.</p>
+    <div class="hero-buttons">
+      <a href="#preview" class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 18v3"/></svg> Try the live preview</a>
+      <a href="#download" class="btn btn-outline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</a>
+    </div>
+  </header>
+
+  <div class="disclaimer"><div>
+    <strong>Disclaimer:</strong> This is an independent, community-developed ACAP package and is <strong>not an official Axis Communications product</strong>. It is not affiliated with, endorsed by, or supported by Axis Communications AB or the MediaMTX project. Use at your own risk.
+  </div></div>
+
+  <main>
+    <section id="why">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">Why you'd use it</span>
+          <h2>One camera, any viewer</h2>
+          <p>MediaMTX is a popular open-source media server. This app runs it on the camera, with a web interface so you never need a terminal.</p>
+        </div>
+        <div class="story-grid">
+          <div class="story"><div class="q">I just want to watch it in a browser</div><p>Open the stream with WebRTC or HLS in any modern browser, on a laptop or a phone, without plugins or a separate server.</p></div>
+          <div class="story"><div class="q">My software wants a plain RTSP stream</div><p>Republish the camera on a stream name you choose, for an NVR, Home Assistant, VLC or anything else that speaks RTSP.</p></div>
+          <div class="story"><div class="q">I need the clip from 14:32 yesterday</div><p>Pick the day on the recordings timeline, click the moment you want, drag to select a range, and download it as an MP4.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">How it works</span>
+          <h2>Video comes in, MediaMTX shares it out</h2>
+          <p>MediaMTX sits on the camera between the video and everyone who wants to watch it. It can also record what passes through.</p>
+        </div>
+        <div class="flow">
+          <div class="flow-col">
+            <h3>Video sources</h3>
+            <div class="node"><span class="i" aria-hidden="true">📷</span><div><strong>This camera</strong><span>Its own video, read locally so it never leaves the device</span></div></div>
+            <div class="node"><span class="i" aria-hidden="true">🎥</span><div><strong>Other cameras</strong><span>Any RTSP stream on the network</span></div></div>
+            <div class="node"><span class="i" aria-hidden="true">📤</span><div><strong>Anything that publishes</strong><span>Push a stream to the camera over RTSP; RTMP and SRT can be turned on</span></div></div>
+          </div>
+          <div class="flow-link"><span class="arrow" aria-hidden="true"></span><small>pulled or pushed</small></div>
+          <div class="flow-col core">
+            <h3>MediaMTX, on the camera</h3>
+            <div class="node"><span class="i" aria-hidden="true">🔀</span><div><strong>Routes each stream</strong><span>One source, many viewers, in several formats at once</span></div></div>
+            <div class="node"><span class="i" aria-hidden="true">💾</span><div><strong>Records if you want</strong><span>Per stream, to the SD card or a recorder's disk</span></div></div>
+            <div class="node"><span class="i" aria-hidden="true">🧭</span><div><strong>Three web pages</strong><span>Settings editor, live view and recordings timeline</span></div></div>
+          </div>
+          <div class="flow-link"><span class="arrow" aria-hidden="true"></span><small>RTSP &middot; WebRTC &middot; HLS</small></div>
+          <div class="flow-col">
+            <h3>Who watches</h3>
+            <div class="node"><span class="i" aria-hidden="true">🌐</span><div><strong>Browsers</strong><span>WebRTC and HLS players served by the camera</span></div></div>
+            <div class="node"><span class="i" aria-hidden="true">🏠</span><div><strong>NVRs, Home Assistant, VLC</strong><span>Standard RTSP on port 8554</span></div></div>
+            <div class="node"><span class="i" aria-hidden="true">🎞️</span><div><strong>MP4 clips</strong><span>Export any time range from the recordings page</span></div></div>
+          </div>
+        </div>
+        <p class="flow-note">Out of the box no stream is set up yet. The settings page includes ready-made examples: uncomment the one for this camera, enter a camera account, and save.</p>
+      </div>
+    </section>
+
+    <section id="preview">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">Try it</span>
+          <h2>This is the real web interface</h2>
+          <p>The same pages that run on the camera, filled with sample recordings and streams. Switch between them below.</p>
+        </div>
+        <div class="preview-tabs" role="tablist" aria-label="Preview pages">
+          <button type="button" role="tab" aria-selected="true" data-src="preview/recordings.html" data-url="https://192.168.0.90/local/MediaMTX/recordings.html" data-title="MediaMTX recordings timeline preview with sample data">Recordings</button>
+          <button type="button" role="tab" aria-selected="false" data-src="preview/live.html" data-url="https://192.168.0.90/local/MediaMTX/live.html" data-title="MediaMTX live streams preview with sample data">Live streams</button>
+          <button type="button" role="tab" aria-selected="false" data-src="preview/index.html" data-url="https://192.168.0.90/local/MediaMTX/index.html" data-title="MediaMTX settings editor preview with sample data">Settings</button>
+        </div>
+        <div class="browser">
+          <div class="browser-bar">
+            <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div class="url" id="previewUrl">https://192.168.0.90/local/MediaMTX/recordings.html</div>
+            <span class="sample">Sample data</span>
+          </div>
+          <iframe id="previewFrame" src="preview/recordings.html" title="MediaMTX recordings timeline preview with sample data" style="height:720px" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms allow-modals"></iframe>
+        </div>
+        <div class="preview-foot">
+          <span>Sample data. There's no camera behind this preview, so video doesn't play and changes only last until you close the tab.</span>
+          <a id="previewFull" href="preview/recordings.html" target="_blank" rel="noopener">Open the preview full screen &rarr;</a>
+        </div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">Features</span>
+          <h2>Everything in the browser</h2>
+        </div>
+        <div class="features">
+          <div class="feature-card"><div class="icon" aria-hidden="true">📡</div><h3>Every common format</h3><p>RTSP for software and NVRs, WebRTC for low-latency browser viewing, HLS for everything else. RTMP and SRT are available when you need them.</p></div>
+          <div class="feature-card"><div class="icon" aria-hidden="true">📝</div><h3>Settings editor built in</h3><p>Edit the MediaMTX configuration in the browser with syntax highlighting, then save and restart. No SSH needed.</p></div>
+          <div class="feature-card"><div class="icon" aria-hidden="true">🗓️</div><h3>Recordings timeline</h3><p>See each day's recordings on a 24-hour bar, click to play from any moment, and export a selection as MP4.</p></div>
+          <div class="feature-card"><div class="icon" aria-hidden="true">🛟</div><h3>Hard to break</h3><p>Every save keeps a backup, and the page warns you if a new configuration stops MediaMTX from starting.</p></div>
+          <div class="feature-card"><div class="icon" aria-hidden="true">⬆️</div><h3>Survives upgrades</h3><p>Your configuration is kept when you install a new version.</p></div>
+          <div class="feature-card"><div class="icon" aria-hidden="true">🛡️</div><h3>No root, fewer open ports</h3><p>Runs as a normal app without root. RTMP, SRT and other extras stay off until you turn them on.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="download">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">Download</span>
+          <h2>Get MediaMTX for Axis</h2>
+          <p>Free and open source. Pick the package for your camera's processor.</p>
+        </div>
+        <div class="download-card">
+          <div class="row"><h3>MediaMTX for Axis</h3><span class="version" id="relVersion">Latest release on GitHub</span></div>
+          <div class="arch-buttons">
+            <a class="arch-btn" data-arch="aarch64" href="https://github.com/Mo3he/Axis_Cam_MediaMTX/releases" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> AARCH64</a>
+            <a class="arch-btn" data-arch="armv7hf" href="https://github.com/Mo3he/Axis_Cam_MediaMTX/releases" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> ARMv7</a>
+          </div>
+          <table class="compat">
+            <tr><th>AXIS OS</th><td>11 to 13 (verified on 13)</td></tr>
+            <tr><th>Processor</th><td>AARCH64 &middot; ARMv7</td></tr>
+            <tr><th>Recording</th><td>Needs an SD card, or a recorder's internal disk</td></tr>
+            <tr><th>Root access</th><td>Not required</td></tr>
+          </table>
+          <p class="arch-help">Not sure which package? Most recent Axis cameras use <strong>AARCH64</strong>. If the camera refuses to install it, use <strong>ARMv7</strong> instead.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">Install</span>
+          <h2>Up and running in a few minutes</h2>
+        </div>
+        <div class="steps">
+          <div class="step"><div class="step-num">1</div><div class="step-text"><strong>Download the package</strong><span>Pick AARCH64 or ARMv7 above.</span></div></div>
+          <div class="step"><div class="step-num">2</div><div class="step-text"><strong>Install it on the camera</strong><span>In the camera's web interface, go to <strong>Apps &rarr; Add app</strong>, upload the file and start the app.</span></div></div>
+          <div class="step"><div class="step-num">3</div><div class="step-text"><strong>Add a stream</strong><span>Click <strong>Open</strong>. In the settings editor, uncomment the example for this camera, fill in a camera account that can view video, then <strong>Save &amp; Restart</strong>.</span></div></div>
+          <div class="step"><div class="step-num">4</div><div class="step-text"><strong>Watch it</strong><span>The <strong>Live</strong> page lists your streams with WebRTC and HLS players and a copyable RTSP address.</span></div></div>
+          <div class="step"><div class="step-num">5</div><div class="step-text"><strong>Record (optional)</strong><span>Choose where recordings go (SD card or disk) and turn recording on for the stream. They appear on the <strong>Recordings</strong> page.</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">Questions</span>
+          <h2>Good to know</h2>
+        </div>
+        <div class="faq">
+          <details><summary>Can I watch from outside my home or office network?</summary><p>Yes, if the viewer can reach the camera. The simplest safe way is a VPN app on the camera, such as <a href="https://mo3he.github.io/Axis_Cam_Tailscale/">Tailscale</a>, rather than opening ports on your router.</p></details>
+          <details><summary>Is it secure?</summary><p>The settings and recordings pages use the camera's own admin login. The media ports and MediaMTX's control interface don't, so keep the camera on a trusted network or behind a firewall.</p></details>
+          <details><summary>Will recordings survive a reboot?</summary><p>Yes, when they're stored on the SD card or disk. The settings include the right location for both; the README explains how to check it.</p></details>
+          <details><summary>Will an update wipe my settings?</summary><p>No. Your configuration is stored separately and kept when you install a new version. Uninstalling the app does remove it, along with its recordings.</p></details>
+          <details><summary>Did you make MediaMTX?</summary><p>No. MediaMTX is developed by the <a href="https://github.com/bluenviron/mediamtx" target="_blank" rel="noopener">bluenviron</a> project. This app packages it for Axis cameras and adds the web pages.</p></details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-links">
+      <a href="https://github.com/Mo3he/Axis_Cam_MediaMTX" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Mo3he/Axis_Cam_MediaMTX#readme" target="_blank" rel="noopener">Full documentation</a>
+      <a href="https://github.com/Mo3he/Axis_Cam_MediaMTX/issues" target="_blank" rel="noopener">Report an issue</a>
+      <a href="https://mo3he.github.io/">All projects</a>
+      <a href="https://github.com/sponsors/Mo3he" target="_blank" rel="noopener">Sponsor</a>
+      <a href="https://buymeacoffee.com/mo3he" target="_blank" rel="noopener">Buy Me a Coffee</a>
+      <a href="https://github.com/bluenviron/mediamtx" target="_blank" rel="noopener">MediaMTX</a>
+    </div>
+    <p>&copy; Mo3he &middot; BSD 3-Clause License</p>
+    <p class="fine">MediaMTX is developed by the bluenviron project and redistributed under the MIT License. Axis and AXIS OS are trademarks of Axis Communications AB. This is an independent project, not affiliated with or endorsed by Axis Communications AB or the MediaMTX project.</p>
+  </footer>
+
+  <script>
+    (function () {
+      var html = document.documentElement;
+      var sun = document.getElementById('iconSun');
+      var moon = document.getElementById('iconMoon');
+      function applyTheme(theme) {
+        if (theme === 'light') { html.setAttribute('data-theme', 'light'); sun.style.display = 'none'; moon.style.display = 'block'; }
+        else { html.removeAttribute('data-theme'); sun.style.display = 'block'; moon.style.display = 'none'; }
+      }
+      var stored = localStorage.getItem('theme');
+      var lightQuery = window.matchMedia('(prefers-color-scheme: light)');
+      applyTheme(stored || (lightQuery.matches ? 'light' : 'dark'));
+      document.getElementById('themeToggle').addEventListener('click', function () {
+        var next = html.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        localStorage.setItem('theme', next);
+        applyTheme(next);
+      });
+      lightQuery.addEventListener('change', function (e) {
+        if (!localStorage.getItem('theme')) applyTheme(e.matches ? 'light' : 'dark');
+      });
+
+      var frame = document.getElementById('previewFrame');
+      var url = document.getElementById('previewUrl');
+      var full = document.getElementById('previewFull');
+      var tabs = document.querySelectorAll('.preview-tabs button');
+      for (var t = 0; t < tabs.length; t++) {
+        tabs[t].addEventListener('click', function () {
+          for (var k = 0; k < tabs.length; k++) tabs[k].setAttribute('aria-selected', 'false');
+          this.setAttribute('aria-selected', 'true');
+          frame.src = this.getAttribute('data-src');
+          frame.title = this.getAttribute('data-title');
+          url.textContent = this.getAttribute('data-url');
+          full.href = this.getAttribute('data-src');
+        });
+      }
+
+      // Point the architecture buttons at the newest release's packages. Prefer a
+      // stable release; fall back to the newest pre-release for beta projects.
+      fetch('https://api.github.com/repos/Mo3he/Axis_Cam_MediaMTX/releases?per_page=10')
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (releases) {
+          var rel = null, i;
+          for (i = 0; i < releases.length && !rel; i++) if (!releases[i].draft && !releases[i].prerelease) rel = releases[i];
+          for (i = 0; i < releases.length && !rel; i++) if (!releases[i].draft) rel = releases[i];
+          if (!rel) return;
+          document.getElementById('relVersion').textContent = rel.tag_name + (rel.prerelease ? ' (pre-release)' : '') + ' \u00b7 ' + new Date(rel.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+          var buttons = document.querySelectorAll('a[data-arch]');
+          for (i = 0; i < buttons.length; i++) {
+            var arch = buttons[i].getAttribute('data-arch');
+            for (var j = 0; j < rel.assets.length; j++) {
+              var name = rel.assets[j].name.toLowerCase();
+              if (name.slice(-4) === '.eap' && name.indexOf(arch) !== -1) {
+                buttons[i].href = rel.assets[j].browser_download_url;
+                buttons[i].removeAttribute('target');
+                break;
+              }
+            }
+          }
+        })
+        .catch(function () {});
+    })();
+  </script>
+</body>
+</html>
