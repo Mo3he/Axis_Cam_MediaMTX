@@ -16,15 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build and run unit tests (ASan/UBSan)
-        run: |
-          set -euo pipefail
-          cc -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
-             -Itests/fcgi_stub tests/test_mp4.c -o tests/test_mp4
-          ./tests/test_mp4
-
-      - name: Validate uncommentable YAML examples
-        run: ruby tests/test_defaults.rb
+      # Same script as the release build (build.yml, acap-build.sh).
+      - name: Unit tests (ASan/UBSan) and uncommentable YAML examples
+        run: sh tests/run.sh
 
   build:
     runs-on: ubuntu-latest
